@@ -1,6 +1,6 @@
 import type { ClientKeyEvent, ClientModule, ClientPointerEvent, ClientSurface } from 'claude-code'
 
-import type { GitFile, Layout, PanelProps, PlanSource, PlanTask, Settings } from '../types'
+import type { Diff, GitFile, Layout, PanelProps, PlanSource, PlanTask, Settings } from '../types'
 
 type Seg = {
   t: string
@@ -26,7 +26,7 @@ type State = {
 }
 type Row = {
   id: string
-  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'gap'
+  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'diff' | 'gap'
   parent?: string
   open?: boolean
   foldable?: boolean
@@ -212,6 +212,31 @@ const fileCount = (props: PanelProps) =>
     ),
   ).size
 
+const diffRows = (parent: string, diff: Diff | undefined): Row[] => {
+  const note = (id: string, text: string): Row => ({ id: `d:${parent}:${id}`, kind: 'diff', parent, text, color: DIM })
+  if (!diff) return [note('wait', 'loading diff…')]
+  if (diff.lines.length === 0) return [note('none', 'no textual changes')]
+  let inHunk = false
+  const rows = diff.lines.map((line, i): Row => {
+    if (line.startsWith('diff --git ')) inHunk = false
+    if (line.startsWith('@@')) inHunk = true
+    const color = line.startsWith('@@')
+      ? 'cyan'
+      : !inHunk || line.startsWith('\\')
+        ? DIM
+        : line.startsWith('+')
+          ? 'green'
+          : line.startsWith('-')
+            ? 'red'
+            : undefined
+
+    return { id: `d:${parent}:${i}`, kind: 'diff', parent, text: line.replace(/\t/g, '  '), color }
+  })
+  if (diff.more > 0) rows.push(note('more', `${diff.more} more lines`))
+
+  return rows
+}
+
 const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
   const rows: Row[] = []
   if (st.tab === 'plan') {
@@ -259,10 +284,19 @@ const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
       rows.push({ id, kind: 'group', foldable: true, open, title, color, count })
       if (!open) continue
       if (files) {
-        for (const file of files) rows.push({ id: `f:${key}:${file.path}`, kind: 'file', parent: id, file })
+        for (const file of files) {
+          const rowId = `f:${key}:${file.path}`
+          const foldable = file.count === null
+          const shown = foldable && (st.fold[rowId] ?? false)
+          rows.push({ id: rowId, kind: 'file', parent: id, file, foldable, open: shown })
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId]))
+        }
       } else {
         for (const commit of git?.commits ?? []) {
-          rows.push({ id: `c:${commit.sha}`, kind: 'commit', parent: id, sha: commit.sha, text: commit.subject })
+          const rowId = `c:${commit.sha}`
+          const shown = st.fold[rowId] ?? false
+          rows.push({ id: rowId, kind: 'commit', parent: id, sha: commit.sha, text: commit.subject, foldable: true, open: shown })
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId]))
         }
       }
     }
@@ -564,7 +598,13 @@ const rowLine = (
       layout === 'powerline'
         ? { t: ` ${file.st} `, fg: color, inv: true, bold: true }
         : { t: file.st, fg: color, bold: true }
-    left = [{ t: '  ' }, stat, { t: ' ' }, { t: name }, ...(dir ? [{ t: ` ${dir}`, fg: DIM }] : [])]
+    left = [
+      row.foldable ? { t: row.open ? '▾ ' : '▸ ', fg: DIM } : { t: '  ' },
+      stat,
+      { t: ' ' },
+      { t: name },
+      ...(dir ? [{ t: ` ${dir}`, fg: DIM }] : []),
+    ]
     if (file.count !== null) {
       right = [{ t: `${file.count} files`, fg: DIM }]
     } else if (file.add !== null || file.del !== null) {
@@ -587,7 +627,15 @@ const rowLine = (
     }
   } else if (row.kind === 'commit') {
     gutter = 'yellow'
-    left = [{ t: '  ' }, { t: row.sha ?? '', fg: 'yellow' }, { t: ' ' }, { t: row.text ?? '' }]
+    left = [
+      { t: row.open ? '▾ ' : '▸ ', fg: DIM },
+      { t: row.sha ?? '', fg: 'yellow' },
+      { t: ' ' },
+      { t: row.text ?? '' },
+    ]
+  } else if (row.kind === 'diff') {
+    gutter = SURFACE
+    left = [{ t: '    ' }, { t: row.text ?? '', fg: row.color }]
   }
 
   const marker: Seg =
@@ -672,6 +720,7 @@ const toggle = (surface: ClientSurface<State>, st: State, rows: Row[], index: nu
   const target = row.foldable ? row : rows.find(one => one.id === row.parent)
   if (!target) return
   const at = rows.indexOf(target)
+  if (target.kind === 'file' || target.kind === 'commit') surface.post({ type: 'diff', key: target.id, open: !target.open })
   surface.setState({
     ...st,
     fold: { ...st.fold, [target.id]: !target.open },
@@ -683,7 +732,8 @@ const toggle = (surface: ClientSurface<State>, st: State, rows: Row[], index: nu
 const setOpen = (surface: ClientSurface<State>, st: State, rows: Row[], index: number, open: boolean) => {
   const row = rows[index]
   if (!row) return
-  const target = row.foldable ? row : rows.find(one => one.id === row.parent)
+  const closedLeaf = row.foldable && row.parent !== undefined && !open && !row.open
+  const target = row.foldable && !closedLeaf ? row : rows.find(one => one.id === row.parent)
   if (!target || target.open === open) {
     if (!row.foldable && target) move(surface, st, rows, rows.indexOf(target))
 

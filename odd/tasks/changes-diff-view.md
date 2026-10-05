@@ -24,7 +24,7 @@ The Changes tab must show the actual diff of a commit and of uncommitted files (
 ## Tasks
 
 - [x] T1: Hook side: `diffs` atom, `diff` ui.message handling for file and commit targets, refresh of open diffs, `PanelProps.diffs` and types, tests with mocked git
-- [ ] T2: Panel side: expandable file and commit rows, colored capped diff rows, key and pointer handling, README
+- [x] T2: Panel side: expandable file and commit rows, colored capped diff rows, key and pointer handling, README
 
 ## Acceptance criteria
 
@@ -39,7 +39,8 @@ The Changes tab must show the actual diff of a commit and of uncommitted files (
 Route: T1 and T2 by one delegated writer (2 non-trivial files plus preparation reads). Expected under 400 authored changed lines per task.
 
 - T1 (hook side): the `diffs` atom holds `{ lines, more }` per key (`f:<group>:<path>` or `c:<sha>`, the panel row id), capped at 200 lines in the hook. A `diff` ui.message with `open: true` runs git and stores it, `open: false` drops the key, and the refresh re-fetches only the stored keys whose file or commit is still listed by git. Untracked uses `git diff --no-index`, so `run` takes the accepted exit codes (0 and 1). Directory rows and non-hex commit ids are refused. RED: 4 opening tests failed (0 diff commands run) with 38 tests total; GREEN: 38 pass. Tests observe git calls (through `process.run`) since the panel does not render diffs until T2. `claude plugin validate .` passes and `tsc` shows the same two pre-existing errors in `hooks/register.tsx`.
+- T2 (panel side): file and commit rows are foldable (`▸`/`▾` marker), Enter, Space, `l`, Right and a click expand and `h`, Left, Enter and a click collapse, each posting `{ type: 'diff', key: <row id>, open }`. New `diff` rows render the stored lines (green, red, cyan, dim headers), a dim `loading diff…`, `no textual changes` or `N more lines` row, truncated to the pane width by `fit`. Diff rows stay cursor targets so a long diff can be scrolled with j and k; Enter on one collapses its parent. Untracked folders are not expandable, so Enter on them folds the group as before. RED: 11 tests failed before the panel change; GREEN: 53 pass (including colors, exit code 1 for untracked, cap, binary, empty, truncation, click, h and l). README describes the diffs, the key table and the refresh note.
 
 ## Next step
 
-T2: panel rows, keys, pointer, README.
+Merge the branch under the repository policy; no further task is open.
