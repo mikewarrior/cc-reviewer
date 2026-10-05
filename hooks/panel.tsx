@@ -1,6 +1,6 @@
 import type { ClientKeyEvent, ClientModule, ClientPointerEvent, ClientSurface } from 'claude-code'
 
-import type { GitFile, Layout, PanelProps, PlanTask, Settings } from '../types'
+import type { GitFile, Layout, PanelProps, PlanSource, PlanTask, Settings } from '../types'
 
 type Seg = {
   t: string
@@ -172,6 +172,24 @@ const elapsed = (ms: number) => {
   if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`
 
   return `${s}s`
+}
+
+const SOURCE_NOTE: Record<PlanSource, string> = {
+  repo: 'set in .claude/cc-reviewer.json',
+  global: 'set in the planDir plugin option',
+  settings: 'the plansDirectory setting',
+  default: "Claude's own plan folder",
+}
+
+const emptyPlan = (search: PanelProps['search']) => {
+  const dir = search?.dir ?? 'the plan folder'
+  const found = search?.source === 'default' ? `No plan for this session in ${dir}.` : `No plan found in ${dir}.`
+  const note = search ? ` (${SOURCE_NOTE[search.source]})` : ''
+
+  return [
+    `${found.slice(0, -1)}${note}.`,
+    'To read another folder, set "planDir" in .claude/cc-reviewer.json, for example { "planDir": "odd/tasks" }.',
+  ]
 }
 
 const tasksOf = (props: PanelProps) =>
@@ -795,15 +813,16 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
 
   const list: Line[] = []
   if (rows.length === 0) {
-    const message =
+    const messages =
       st.tab === 'plan'
         ? props.plan
-          ? 'This plan has no sections.'
-          : 'No plan file in odd/tasks.'
-        : props.git
-          ? 'Working tree clean.'
-          : 'Not a git repository.'
-    list.push([{ t: ` ${message}`, fg: st.tab === 'changes' && props.git ? 'green' : DIM }])
+          ? ['This plan has no sections.']
+          : emptyPlan(props.search)
+        : [props.git ? 'Working tree clean.' : 'Not a git repository.']
+    const color = st.tab === 'changes' && props.git ? 'green' : DIM
+    for (const message of messages) {
+      for (const part of wrap(message, Math.max(8, width - 2))) list.push([{ t: ` ${part}`, fg: color }])
+    }
   }
   for (let i = top; i < Math.min(rows.length, top + listHeight); i++) {
     list.push(rowLine(rows[i]!, i, st, props, width, i === cursor && !st.settingsOpen))

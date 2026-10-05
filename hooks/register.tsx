@@ -7,13 +7,15 @@ import type {
   Layout,
   PanelProps,
   Plan,
+  PlanSearch,
   PlanSection,
+  PlanSource,
   PlanTask,
   Settings,
 } from '../types'
 
 const PANE = 'cc-reviewer'
-const DIR = 'odd/tasks'
+const REPO_FILE = '.claude/cc-reviewer.json'
 const REFRESH_MS = 4000
 const BODY_LINES = 40
 
@@ -23,10 +25,13 @@ const settings = atom({ plugin: 'cc-reviewer', key: 'settings' } as const, {
   layout: 'outline',
   nerdFont: false,
 })
+const search = atom({ plugin: 'cc-reviewer', key: 'search' } as const, null)
 const active = atom({ plugin: 'cc-reviewer', key: 'active' } as const, null)
+const bound = atom({ plugin: 'cc-reviewer', key: 'bound' } as const, null)
 const runningSince = atom({ plugin: 'cc-reviewer', key: 'runningSince' } as const, null)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
+type Folder = { label: string; path: string | null; source: PlanSource; newest: boolean }
 
 const LAYOUTS: Layout[] = ['outline', 'powerline', 'focus']
 const CHECK = /^\s*[-*]\s+\[([^\]])\]\s*(.*)$/
@@ -38,11 +43,31 @@ const clean = (text: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-const nameOf = (path: string) => {
-  const match = /(?:^|\/)odd\/tasks\/([^/]+)\.md$/.exec(path)
+const isAbsolute = (path: string) => /^([/\\]|[A-Za-z]:[\\/])/.test(path)
 
-  return match ? match[1]! : null
+const normalize = (path: string) => {
+  const parts: string[] = []
+  for (const part of path.replace(/\\/g, '/').split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+
+  return `${/^[/\\]/.test(path) ? '/' : ''}${parts.join('/')}`
 }
+
+const resolvePath = (cwd: string, path: string) =>
+  normalize(isAbsolute(path) || cwd === '' ? path : `${cwd}/${path}`)
+
+const childOf = (dir: string, path: string) => {
+  const prefix = `${dir}/`
+  if (!path.startsWith(prefix)) return null
+  const name = path.slice(prefix.length)
+
+  return name !== '' && !name.includes('/') && name.endsWith('.md') ? name : null
+}
+
+const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
 
 const bodyLines = (lines: string[]) => {
   const out: string[] = []
@@ -75,7 +100,7 @@ const parseTasks = (lines: string[]): PlanTask[] => {
   return tasks
 }
 
-const parsePlan = (name: string, markdown: string): Plan => {
+const parsePlan = (name: string, markdown: string, file: string): Plan => {
   let title = name
   let heading = ''
   let body: string[] = []
@@ -122,7 +147,7 @@ const parsePlan = (name: string, markdown: string): Plan => {
   return {
     ticket: ticket ? ticket[1]!.toUpperCase() : '',
     title: title.replace(/^[A-Za-z]+-\d+\s*[—–:-]*\s*/, '') || title,
-    file: `${DIR}/${name}.md`,
+    file,
     sections,
   }
 }
@@ -234,23 +259,92 @@ async function setGit($: Dollar, value: Git | null) {
   if (JSON.stringify(before) !== JSON.stringify(value)) await update($, git, () => value)
 }
 
-async function refresh($: Dollar) {
+async function repoDir($: Dollar) {
+  try {
+    const parsed = JSON.parse(await $.fs.read(REPO_FILE)) as { planDir?: unknown } | null
+
+    return trimmed(parsed?.planDir)
+  } catch {
+    return ''
+  }
+}
+
+async function claudeFolder($: Dollar, cwd: string): Promise<Folder> {
+  let configured = ''
+  try {
+    configured = trimmed((await $.settings.read()).plansDirectory)
+  } catch {
+    configured = ''
+  }
+  if (configured !== '') {
+    return { label: configured, path: resolvePath(cwd, configured), source: 'settings', newest: true }
+  }
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || ''
+
+  return {
+    label: '~/.claude/plans',
+    path: home === '' ? null : normalize(`${home}/.claude/plans`),
+    source: 'default',
+    newest: false,
+  }
+}
+
+async function locate($: Dollar, globalDir: string) {
+  let cwd = ''
+  try {
+    cwd = await $.session.cwd()
+  } catch {
+    cwd = ''
+  }
+  const configured: [string, PlanSource][] = [
+    [await repoDir($), 'repo'],
+    [globalDir, 'global'],
+  ]
+  for (const [dir, source] of configured) {
+    if (dir !== '') {
+      const folder: Folder = { label: dir, path: resolvePath(cwd, dir), source, newest: true }
+
+      return { cwd, folder }
+    }
+  }
+
+  return { cwd, folder: await claudeFolder($, cwd) }
+}
+
+async function refreshPlan($: Dollar, globalDir: string) {
+  const { folder } = await locate($, globalDir)
   let found: Plan | null = null
   try {
-    const entries = await $.fs.list(DIR)
-    const files = entries
-      .filter(entry => entry.kind === 'file' && entry.name.endsWith('.md'))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    const wanted = await read($, active)
-    const file = files.find(one => one.name === `${wanted}.md`) ?? files[0]
-    if (file) {
-      const text = await $.fs.read(`${DIR}/${file.name}`)
-      found = parsePlan(file.name.replace(/\.md$/, ''), text)
+    if (folder.path !== null) {
+      const dir = folder.path
+      const entries = await $.fs.list(dir)
+      const files = entries
+        .filter(entry => entry.kind === 'file' && entry.name.endsWith('.md'))
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      const pick = async (path: string | null) => {
+        const name = path === null ? null : childOf(dir, path)
+
+        return files.find(one => one.name === name)
+      }
+      const file =
+        (await pick(await read($, bound))) ??
+        (await pick(await read($, active))) ??
+        (folder.newest ? files[0] : undefined)
+      if (file) {
+        const text = await $.fs.read(`${dir}/${file.name}`)
+        found = parsePlan(
+          file.name.replace(/\.md$/, ''),
+          text,
+          `${folder.label.replace(/[/\\]+$/, '')}/${file.name}`,
+        )
+      }
     }
   } catch {
     found = null
   }
   await setPlan($, found)
+  const searched: PlanSearch = { dir: folder.label, source: folder.source }
+  if (JSON.stringify(await read($, search)) !== JSON.stringify(searched)) await update($, search, () => searched)
 
   const running = found?.sections.flatMap(s => s.tasks ?? []).find(t => t.status === 'running')
   let since: number | null = null
@@ -265,6 +359,10 @@ async function refresh($: Dollar) {
     }
   }
   await update($, runningSince, () => since)
+}
+
+async function refresh($: Dollar, globalDir: string) {
+  await refreshPlan($, globalDir)
 
   const status = await run($, ['git', '--no-optional-locks', 'status', '--porcelain=v1', '--branch'])
   if (status === null) {
@@ -281,13 +379,24 @@ async function refresh($: Dollar) {
   await setGit($, parseGit(status, worktree ?? '', cached ?? '', log ?? '', others ?? ''))
 }
 
-async function touch($: Dollar, path: string) {
-  const name = nameOf(path)
-  if (name !== null) await update($, active, () => name)
-  await refresh($)
+async function bind($: Dollar, path: string, globalDir: string) {
+  if (path === '') return
+  await update($, bound, () => path)
+  await refreshPlan($, globalDir)
 }
 
-export const register: Register = on => {
+async function touch($: Dollar, path: string, globalDir: string) {
+  const { cwd, folder } = await locate($, globalDir)
+  if (folder.path !== null) {
+    const absolute = resolvePath(cwd, path)
+    if (childOf(folder.path, absolute) !== null) await update($, active, () => absolute)
+  }
+  await refresh($, globalDir)
+}
+
+export const register: Register = (on, options) => {
+  const globalDir = trimmed(options.planDir)
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'cc-reviewer',
@@ -298,15 +407,15 @@ export const register: Register = on => {
       const layout = LAYOUTS.includes(saved.layout as Layout) ? (saved.layout as Layout) : 'outline'
       await update($, settings, () => ({ layout, nerdFont: saved.nerdFont === true }))
     }
-    await refresh($)
-    $.clock.every(REFRESH_MS, () => refresh($))
+    await refresh($, globalDir)
+    $.clock.every(REFRESH_MS, () => refresh($, globalDir))
     void $.ui.open({ id: PANE, title: 'cc-reviewer' })
 
     return next(e)
   })
 
   on('command.run', { command: 'cc-reviewer' }, async $ => {
-    await refresh($)
+    await refresh($, globalDir)
     await $.ui.open({ id: PANE, title: 'cc-reviewer' })
 
     return { text: 'cc-reviewer pane opened.' }
@@ -314,30 +423,48 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
     const ran = await next(e)
-    await touch($, e.file_path)
+    await touch($, e.file_path, globalDir)
 
     return ran
   })
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     const ran = await next(e)
-    await touch($, e.file_path)
+    await touch($, e.file_path, globalDir)
 
     return ran
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     const ran = await next(e)
-    await touch($, e.file_path)
+    await touch($, e.file_path, globalDir)
 
     return ran
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    await refresh($)
+    await refresh($, globalDir)
 
     return ran
+  })
+
+  on('prompt.attachment', { type: 'plan_mode' }, async ($, e, next) => {
+    await bind($, trimmed(e.detail?.planFilePath), globalDir)
+
+    return next(e)
+  })
+
+  on('prompt.attachment', { type: 'plan_mode_reentry' }, async ($, e, next) => {
+    await bind($, trimmed(e.detail?.planFilePath), globalDir)
+
+    return next(e)
+  })
+
+  on('prompt.attachment', { type: 'plan_mode_exit' }, async ($, e, next) => {
+    await bind($, trimmed(e.detail?.planFilePath), globalDir)
+
+    return next(e)
   })
 
   on('ui.message', async ($, e, next) => {
@@ -360,6 +487,7 @@ export const register: Register = on => {
       rows: e.props.scroll?.bodyRows || (e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : 24),
       settings: await read($, settings),
       plan: await read($, plan),
+      search: await read($, search),
       git: await read($, git),
       runningSince: await read($, runningSince),
     }

@@ -34,10 +34,40 @@ const STATUS = [
 type On = Parameters<Parameters<typeof test>[1]>[1]
 type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 
-type Options = { git?: boolean; plan?: boolean; onSave?: (key: string, value: unknown) => void }
+type Entry = { name: string; mtimeMs: number }
 
-const stubEngine = (on: On, { git = true, plan = true, onSave }: Options = {}) => {
+type Options = {
+  git?: boolean
+  plan?: boolean
+  onSave?: (key: string, value: unknown) => void
+  repo?: string | null
+  folders?: Record<string, Entry[]>
+  contents?: Record<string, string>
+  settings?: Record<string, unknown>
+  env?: Record<string, string>
+}
+
+const REPO_FILE = '.claude/cc-reviewer.json'
+
+const planOf = (title: string) => `# ${title}\n\n## Tasks\n\n- [ ] T1: Do ${title}`
+
+const stubEngine = (
+  on: On,
+  {
+    git = true,
+    plan = true,
+    onSave,
+    repo = '{ "planDir": "odd/tasks" }',
+    folders = plan ? { '/work/odd/tasks': [{ name: 'proj-1-example.md', mtimeMs: 2 }] } : {},
+    contents = { '/work/odd/tasks/proj-1-example.md': PLAN },
+    settings = {},
+    env = {},
+  }: Options = {},
+) => {
   on('session.start', () => ({ cwd: '/work' }))
+  on('session.cwd', () => ({ value: '/work' }))
+  on('settings.read', () => ({ value: settings }))
+  on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('store.get', () => ({ value: undefined }))
@@ -48,14 +78,22 @@ const stubEngine = (on: On, { git = true, plan = true, onSave }: Options = {}) =
   })
   on('clock.every', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_000_000 }))
-  on('fs.list', () => {
-    if (!plan) throw new Error('ENOENT')
+  on('fs.list', (_$, e) => {
+    const entries = folders[e.path]
+    if (!entries) throw new Error('ENOENT')
 
     return {
-      value: [{ name: 'proj-1-example.md', kind: 'file', size: 1, mtimeMs: 2, isLink: false }],
+      value: entries.map(entry => ({ ...entry, kind: 'file', size: 1, isLink: false })),
     }
   })
-  on('fs.read', () => ({ value: PLAN }))
+  on('fs.read', (_$, e) => {
+    const text = e.path.endsWith(REPO_FILE) ? repo : contents[e.path]
+    if (text === null || text === undefined) throw new Error('ENOENT')
+
+    return { value: text }
+  })
+  on('prompt.attachment', () => ({ text: null }))
+  on('tool.call', () => ({ result: {}, text: 'ok', isReadOnly: true }))
   on('process.run', (_$, e) => {
     if (!git) throw new Error('not a repo')
     const argv = e.argv.join(' ')
@@ -74,6 +112,14 @@ const stubEngine = (on: On, { git = true, plan = true, onSave }: Options = {}) =
     return { value: { exitCode: 0, stdout: out, stderr: '' } }
   })
 }
+
+const bindPlan = ($: Dollar, planFilePath: string) =>
+  $.prompt.attachment({
+    type: 'plan_mode',
+    text: 'Plan mode is on.',
+    origin: { kind: 'engine' },
+    detail: { reminder: 'full', planFilePath, hasPlan: true },
+  })
 
 const mountPane = ($: Dollar) =>
   $.ui.mount({
@@ -171,7 +217,136 @@ test('says so when there is no plan or no git repository', async ($, on) => {
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan file/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found in odd\/tasks/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
   await ui.key({ ...IN, key: '2' })
   expect(await ui.find({ ...IN, text: /Not a git repository/ })).toBeDefined()
+})
+
+test('the repo file wins over the global option', async ($, on) => {
+  stubEngine(on, {
+    folders: {
+      '/work/odd/tasks': [{ name: 'repo.md', mtimeMs: 1 }],
+      '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }],
+    },
+    contents: {
+      '/work/odd/tasks/repo.md': planOf('Repo plan'),
+      '/work/docs/plans/global.md': planOf('Global plan'),
+    },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Repo plan/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /odd\/tasks\/repo\.md/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Global plan/ })).toBeUndefined()
+})
+
+test('the global option is used when the repo has no file', { options: { planDir: 'docs/plans' } }, async ($, on) => {
+  stubEngine(on, {
+    repo: null,
+    folders: { '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }] },
+    contents: { '/work/docs/plans/global.md': planOf('Global plan') },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Global plan/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /docs\/plans\/global\.md/ })).toBeDefined()
+})
+
+for (const repo of ['{ not json', '{ "planDir": "   " }', '[]']) {
+  test(`a repo file holding ${repo} is ignored`, { options: { planDir: 'docs/plans' } }, async ($, on) => {
+    stubEngine(on, {
+      repo,
+      folders: { '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }] },
+      contents: { '/work/docs/plans/global.md': planOf('Global plan') },
+    })
+    await $.session.start({ cwd: '/work' })
+    const ui = await mountPane($)
+
+    expect(await ui.find({ ...IN, text: /Global plan/ })).toBeDefined()
+  })
+}
+
+test('the session last touched file wins over the newest one in a configured folder', async ($, on) => {
+  stubEngine(on, {
+    folders: {
+      '/work/odd/tasks': [
+        { name: 'old.md', mtimeMs: 1 },
+        { name: 'new.md', mtimeMs: 9 },
+      ],
+    },
+    contents: {
+      '/work/odd/tasks/old.md': planOf('Old plan'),
+      '/work/odd/tasks/new.md': planOf('New plan'),
+    },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+  expect(await ui.find({ ...IN, text: /New plan/ })).toBeDefined()
+
+  await ui.unmount()
+  await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/old.md' })
+  const again = await mountPane($)
+  expect(await again.find({ ...IN, text: /Old plan/ })).toBeDefined()
+
+  await again.unmount()
+  await $.tool.call({ tool: 'Read', file_path: '/work/README.md' })
+  const last = await mountPane($)
+  expect(await last.find({ ...IN, text: /Old plan/ })).toBeDefined()
+})
+
+test("Claude's default folder shows only the session plan, never the newest", async ($, on) => {
+  stubEngine(on, {
+    repo: null,
+    env: { HOME: '/home/me' },
+    folders: {
+      '/home/me/.claude/plans': [
+        { name: 'other-project.md', mtimeMs: 9 },
+        { name: 'mine.md', mtimeMs: 1 },
+      ],
+    },
+    contents: {
+      '/home/me/.claude/plans/other-project.md': planOf('Other project'),
+      '/home/me/.claude/plans/mine.md': planOf('My plan'),
+    },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Other project/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /No plan for this session/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
+
+  await ui.unmount()
+  await bindPlan($, '/home/me/.claude/plans/mine.md')
+  const bound = await mountPane($)
+  expect(await bound.find({ ...IN, text: /My plan/ })).toBeDefined()
+  expect(await bound.find({ ...IN, text: /Other project/ })).toBeUndefined()
+})
+
+test('plansDirectory falls back to the newest file when the session has no plan yet', async ($, on) => {
+  stubEngine(on, {
+    repo: null,
+    settings: { plansDirectory: '.plans' },
+    folders: {
+      '/work/.plans': [
+        { name: 'old.md', mtimeMs: 1 },
+        { name: 'new.md', mtimeMs: 9 },
+      ],
+    },
+    contents: {
+      '/work/.plans/old.md': planOf('Old plan'),
+      '/work/.plans/new.md': planOf('New plan'),
+    },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+  expect(await ui.find({ ...IN, text: /New plan/ })).toBeDefined()
+
+  await ui.unmount()
+  await bindPlan($, '/work/.plans/old.md')
+  const bound = await mountPane($)
+  expect(await bound.find({ ...IN, text: /Old plan/ })).toBeDefined()
 })

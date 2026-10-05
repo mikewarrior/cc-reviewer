@@ -4,6 +4,8 @@ export type Settings = { layout: Layout; nerdFont: boolean }
 export type TaskStatus = 'done' | 'running' | 'todo'
 export type PlanTask = { id: string; text: string; status: TaskStatus }
 export type PlanSection = { title: string; lines: string[]; tasks: PlanTask[] | null }
+export type PlanSource = 'repo' | 'global' | 'settings' | 'default'
+export type PlanSearch = { dir: string; source: PlanSource }
 export type Plan = {
   ticket: string
   title: string
@@ -37,6 +39,7 @@ export type PanelProps = {
   rows: number
   settings: Settings
   plan: Plan | null
+  search: PlanSearch | null
   git: Git | null
   runningSince: number | null
 }
@@ -45,9 +48,11 @@ declare module 'claude-code' {
   interface PluginState {
     'cc-reviewer': {
       plan: Plan | null
+      search: PlanSearch | null
       git: Git | null
       settings: Settings
       active: string | null
+      bound: string | null
       runningSince: number | null
     }
   }

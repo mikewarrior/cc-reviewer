@@ -9,5 +9,14 @@
   "license": "Apache-2.0",
   "repository": "https://github.com/mikewarrior/cc-reviewer",
   "keywords": ["claude-code", "side-pane", "plan", "tasks", "git-status"],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "planDir": {
+      "type": "string",
+      "title": "Plan folder",
+      "description": "Folder with the plan Markdown files, relative to the project or absolute. Leave empty to use Claude's own plan folder. A .claude/cc-reviewer.json file with planDir in a project overrides this.",
+      "default": "",
+      "required": false
+    }
+  }
 }
