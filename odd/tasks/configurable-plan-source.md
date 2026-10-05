@@ -31,8 +31,8 @@ Resolution, first match wins:
 ## Tasks
 
 - [x] T1: Resolve the plan folder (repo file, global option, Claude default) and bind to the session plan file; types, manifest option, tests (cb627aa)
-- [x] T2: Empty state in the Plan tab names the folder searched and how to configure it (T2_HASH)
-- [ ] T3: README documents the setting, precedence and session binding
+- [x] T2: Empty state in the Plan tab names the folder searched and how to configure it (dd7b4db)
+- [x] T3: README documents the setting, precedence and session binding (84ba0cb)
 
 ## Acceptance criteria
 
@@ -44,6 +44,8 @@ Resolution, first match wins:
 
 Route: T1 delegated writer (multi-file, preparation reads), T2/T3 same writer. Delivery: one slice, well under 400 changed lines expected per task.
 
+Verification: `claude plugin validate .` passed; `claude plugin test .` 13 pass, 0 fail (T2 RED observed: 2 fail against the old empty state); `tsc -p .` reports only errors that already existed on the base commit.
+
 ## Next step
 
-Launch writer.
+Review the branch and decide on push and pull request.
