@@ -949,3 +949,94 @@ test('the cursor row over a diff line is lighter and carries the marker', async 
   const [other] = await rowFor(ui, /old line/)
   expect(bgOf(other!)).toEqual([DEL])
 })
+
+const wheel = ($: Dollar, by: number) =>
+  $.ui.scroll({
+    component: 'Pane',
+    requestId: 'cc-reviewer',
+    offset: 0,
+    by,
+    bodyRows: 24,
+    contentRows: 24,
+    origin: { kind: 'person' },
+  } as never)
+
+const longDiff = () => patch(...Array.from({ length: 250 }, (_, i) => `+row ${i}`))
+
+const visible = async (ui: Awaited<ReturnType<typeof mountPane>>, text: RegExp) => (await rowFor(ui, text)).length > 0
+
+test('the wheel scrolls a long diff down and back up', async ($, on) => {
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: longDiff() } })
+  await press(ui, 'j', 'return')
+  expect(await visible(ui, /│ row 0 *$/)).toBe(true)
+  expect(await visible(ui, /│ row 30 *$/)).toBe(false)
+
+  await wheel($, 10)
+  expect(await visible(ui, /abc1234/)).toBe(false)
+  expect(await visible(ui, /│ row 0 *$/)).toBe(false)
+  expect(await visible(ui, /│ row 20 *$/)).toBe(true)
+
+  await wheel($, 20)
+  expect(await visible(ui, /│ row 20 *$/)).toBe(false)
+  expect(await visible(ui, /│ row 40 *$/)).toBe(true)
+
+  await wheel($, -30)
+  expect(await visible(ui, /abc1234/)).toBe(true)
+  expect(await visible(ui, /│ row 0 *$/)).toBe(true)
+})
+
+test('the wheel clamps at both ends', async ($, on) => {
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: longDiff() } })
+  await press(ui, 'j', 'return')
+
+  await wheel($, -50)
+  expect(await visible(ui, /abc1234/)).toBe(true)
+
+  await wheel($, 5000)
+  expect(await visible(ui, /55 more lines/)).toBe(true)
+  expect(await visible(ui, /abc1234/)).toBe(false)
+  await wheel($, 5000)
+  expect(await visible(ui, /55 more lines/)).toBe(true)
+
+  await wheel($, -5000)
+  expect(await visible(ui, /abc1234/)).toBe(true)
+  expect(await visible(ui, /55 more lines/)).toBe(false)
+})
+
+test('one wheel event is applied once however often the pane redraws', async ($, on) => {
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: longDiff() } })
+  await press(ui, 'j', 'return')
+
+  await wheel($, 8)
+  expect(await visible(ui, /│ row 4 *$/)).toBe(true)
+  expect(await visible(ui, /│ row 3 *$/)).toBe(false)
+  await bash($)
+  await ui.redraw()
+  await press(ui, 'j')
+  expect(await visible(ui, /│ row 4 *$/)).toBe(true)
+  expect(await visible(ui, /│ row 3 *$/)).toBe(false)
+})
+
+test('the wheel scrolls the Plan tab too', async ($, on) => {
+  const tasks = Array.from({ length: 40 }, (_, i) => `- [ ] T${i}: job ${i}`).join('\n')
+  stubEngine(on, { contents: { '/work/odd/tasks/proj-1-example.md': `# PROJ-1 — Long\n\n## Tasks\n\n${tasks}` } })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+  expect(await visible(ui, /job 0 /)).toBe(true)
+
+  await wheel($, 12)
+  expect(await visible(ui, /job 0 /)).toBe(false)
+  expect(await visible(ui, /job 15 /)).toBe(true)
+  await wheel($, -12)
+  expect(await visible(ui, /job 0 /)).toBe(true)
+})
+
+test('the wheel is ignored while the settings menu is open', async ($, on) => {
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: longDiff() } })
+  await press(ui, 'j', 'return', 's')
+
+  await wheel($, 30)
+  await press(ui, 's')
+  expect(await visible(ui, /abc1234/)).toBe(true)
+  expect(await visible(ui, /│ row 0 *$/)).toBe(true)
+})

@@ -94,7 +94,7 @@ Click the pane to give it keyboard focus. Escape hands the focus back to the pro
 | `s` or `,` | Open settings (`s`, `,` or `q` closes it) |
 | `q` | Close the pane |
 
-Tabs, rows and the gear icon also respond to a mouse click.
+Tabs, rows and the gear icon also respond to a mouse click, and the mouse wheel scrolls the list (not while the settings menu is open).
 
 The pane re-reads the plan file and `git` every few seconds and after every Read, Write, Edit and Bash call. Diffs are fetched only when you expand a row, and the refresh then re-runs git for the open diffs alone. Folders in the Untracked group have no diff.
 

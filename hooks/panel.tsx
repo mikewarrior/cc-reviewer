@@ -112,6 +112,7 @@ let current: PanelProps
 let lastLines: Line[] = []
 let listHeight = 1
 let modalRect = { x: 0, y: 0, w: 0, h: 0 }
+let wheelSeen = 0
 
 const len = (line: Line) => line.reduce((n, seg) => n + seg.t.length, 0)
 
@@ -929,8 +930,9 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   const width = surface.columns > 0 ? surface.columns : props.columns
   const height = surface.rows > 0 ? Math.min(surface.rows, props.rows) : props.rows
   const first = surface.state === undefined
-  const st = surface.state ?? initial(props)
+  let st = surface.state ?? initial(props)
   if (first) {
+    wheelSeen = props.wheel
     surface.setState(st)
     surface.every(100, () => tick(surface))
   }
@@ -942,8 +944,23 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   const foot = footer(st, width, hasRunning)
   listHeight = Math.max(1, height - head.length - foot.length)
   const rows = buildRows(props, st, width)
-  const cursor = Math.max(0, Math.min(rows.length - 1, st.cursor))
-  const top = Math.max(0, Math.min(scrollTo(cursor, st.top, listHeight), Math.max(0, rows.length - listHeight)))
+  const reach = (from: State) => {
+    const at = Math.max(0, Math.min(rows.length - 1, from.cursor))
+
+    return { at, from: Math.max(0, Math.min(scrollTo(at, from.top, listHeight), Math.max(0, rows.length - listHeight))) }
+  }
+  const pulled = props.wheel - wheelSeen
+  wheelSeen = props.wheel
+  if (pulled !== 0 && !st.settingsOpen && !first) {
+    const base = reach(st)
+    const next = Math.max(0, Math.min(base.from + pulled, Math.max(0, rows.length - listHeight)))
+    const last = Math.min(rows.length - 1, next + listHeight - 1)
+    let moved = Math.max(next, Math.min(base.at, last))
+    if (rows[moved]?.kind === 'gap') moved = moved < last ? moved + 1 : moved - 1
+    st = { ...st, top: next, cursor: moved }
+    surface.setState(st)
+  }
+  const { at: cursor, from: top } = reach(st)
 
   const list: Line[] = []
   if (rows.length === 0) {

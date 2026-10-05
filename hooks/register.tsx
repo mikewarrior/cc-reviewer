@@ -37,6 +37,7 @@ const search = atom({ plugin: 'cc-reviewer', key: 'search' } as const, null)
 const active = atom({ plugin: 'cc-reviewer', key: 'active' } as const, null)
 const bound = atom({ plugin: 'cc-reviewer', key: 'bound' } as const, null)
 const diffs = atom({ plugin: 'cc-reviewer', key: 'diffs' } as const, {})
+const wheel = atom({ plugin: 'cc-reviewer', key: 'wheel' } as const, 0)
 const runningSince = atom({ plugin: 'cc-reviewer', key: 'runningSince' } as const, null)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
@@ -622,6 +623,12 @@ export const register: Register = (on, options) => {
     return {}
   })
 
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    if (e.by !== 0) await update($, wheel, total => total + e.by)
+
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Client } = $.ui.resolve(e)
     const props: PanelProps = {
@@ -632,6 +639,7 @@ export const register: Register = (on, options) => {
       search: await read($, search),
       git: await read($, git),
       diffs: await read($, diffs),
+      wheel: await read($, wheel),
       runningSince: await read($, runningSince),
     }
 

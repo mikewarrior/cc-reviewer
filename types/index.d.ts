@@ -44,6 +44,7 @@ export type PanelProps = {
   search: PlanSearch | null
   git: Git | null
   diffs: Record<string, Diff>
+  wheel: number
   runningSince: number | null
 }
 
@@ -54,6 +55,7 @@ declare module 'claude-code' {
       search: PlanSearch | null
       git: Git | null
       diffs: Record<string, Diff>
+      wheel: number
       settings: Settings
       active: string | null
       bound: string | null
