@@ -18,6 +18,8 @@ const PANE = 'cc-reviewer'
 const REPO_FILE = '.claude/cc-reviewer.json'
 const REFRESH_MS = 4000
 const BODY_LINES = 40
+const BRANCH_PLANS = 'branchPlans'
+const DEFAULT_BRANCHES = ['main', 'master']
 
 const plan = atom({ plugin: 'cc-reviewer', key: 'plan' } as const, null)
 const git = atom({ plugin: 'cc-reviewer', key: 'git' } as const, null)
@@ -31,7 +33,7 @@ const bound = atom({ plugin: 'cc-reviewer', key: 'bound' } as const, null)
 const runningSince = atom({ plugin: 'cc-reviewer', key: 'runningSince' } as const, null)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
-type Folder = { label: string; path: string | null; source: PlanSource; newest: boolean }
+type Folder = { label: string; path: string | null; source: PlanSource }
 
 const LAYOUTS: Layout[] = ['outline', 'powerline', 'focus']
 const CHECK = /^\s*[-*]\s+\[([^\]])\]\s*(.*)$/
@@ -68,6 +70,21 @@ const childOf = (dir: string, path: string) => {
 }
 
 const trimmed = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+const matchesBranch = (branch: string, name: string) => {
+  const base = slug(name.replace(/\.md$/, ''))
+  if (base === '') return false
+  if (slug(branch) === base || slug(branch.split('/').pop() ?? '') === base) return true
+  const ticket = /[A-Za-z]+-\d+/.exec(branch)
+
+  return ticket !== null && new RegExp(`^${ticket[0]}(?!\\d)`, 'i').test(name)
+}
 
 const bodyLines = (lines: string[]) => {
   const out: string[] = []
@@ -277,7 +294,7 @@ async function claudeFolder($: Dollar, cwd: string): Promise<Folder> {
     configured = ''
   }
   if (configured !== '') {
-    return { label: configured, path: resolvePath(cwd, configured), source: 'settings', newest: true }
+    return { label: configured, path: resolvePath(cwd, configured), source: 'settings' }
   }
   const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE')) || ''
 
@@ -285,7 +302,6 @@ async function claudeFolder($: Dollar, cwd: string): Promise<Folder> {
     label: '~/.claude/plans',
     path: home === '' ? null : normalize(`${home}/.claude/plans`),
     source: 'default',
-    newest: false,
   }
 }
 
@@ -302,7 +318,7 @@ async function locate($: Dollar, globalDir: string) {
   ]
   for (const [dir, source] of configured) {
     if (dir !== '') {
-      const folder: Folder = { label: dir, path: resolvePath(cwd, dir), source, newest: true }
+      const folder: Folder = { label: dir, path: resolvePath(cwd, dir), source }
 
       return { cwd, folder }
     }
@@ -311,8 +327,29 @@ async function locate($: Dollar, globalDir: string) {
   return { cwd, folder: await claudeFolder($, cwd) }
 }
 
+async function branchName($: Dollar) {
+  const branch = trimmed(await run($, ['git', '--no-optional-locks', 'branch', '--show-current']))
+
+  return DEFAULT_BRANCHES.includes(branch) ? '' : branch
+}
+
+async function recall($: Dollar, cwd: string, branch: string) {
+  const plans = (await $.store.get(BRANCH_PLANS)) as Record<string, unknown> | undefined
+  const path = plans?.[`${cwd}\n${branch}`]
+
+  return typeof path === 'string' ? path : null
+}
+
+async function remember($: Dollar, cwd: string, path: string) {
+  const branch = await branchName($)
+  if (branch === '') return
+  const plans = ((await $.store.get(BRANCH_PLANS)) as Record<string, unknown> | undefined) ?? {}
+  const key = `${cwd}\n${branch}`
+  if (plans[key] !== path) await $.store.set(BRANCH_PLANS, { ...plans, [key]: path })
+}
+
 async function refreshPlan($: Dollar, globalDir: string) {
-  const { folder } = await locate($, globalDir)
+  const { cwd, folder } = await locate($, globalDir)
   let found: Plan | null = null
   try {
     if (folder.path !== null) {
@@ -326,10 +363,14 @@ async function refreshPlan($: Dollar, globalDir: string) {
 
         return files.find(one => one.name === name)
       }
+      const byBranch = async () => {
+        const branch = await branchName($)
+        if (branch === '') return undefined
+
+        return (await pick(await recall($, cwd, branch))) ?? files.find(one => matchesBranch(branch, one.name))
+      }
       const file =
-        (await pick(await read($, bound))) ??
-        (await pick(await read($, active))) ??
-        (folder.newest ? files[0] : undefined)
+        (await pick(await read($, bound))) ?? (await pick(await read($, active))) ?? (await byBranch())
       if (file) {
         const text = await $.fs.read(`${dir}/${file.name}`)
         found = parsePlan(
@@ -382,6 +423,9 @@ async function refresh($: Dollar, globalDir: string) {
 async function bind($: Dollar, path: string, globalDir: string) {
   if (path === '') return
   await update($, bound, () => path)
+  const { cwd, folder } = await locate($, globalDir)
+  const absolute = resolvePath(cwd, path)
+  if (folder.path !== null && childOf(folder.path, absolute) !== null) await remember($, cwd, absolute)
   await refreshPlan($, globalDir)
 }
 
@@ -389,7 +433,10 @@ async function touch($: Dollar, path: string, globalDir: string) {
   const { cwd, folder } = await locate($, globalDir)
   if (folder.path !== null) {
     const absolute = resolvePath(cwd, path)
-    if (childOf(folder.path, absolute) !== null) await update($, active, () => absolute)
+    if (childOf(folder.path, absolute) !== null) {
+      await update($, active, () => absolute)
+      await remember($, cwd, absolute)
+    }
   }
   await refresh($, globalDir)
 }
