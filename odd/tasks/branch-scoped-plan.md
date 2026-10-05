@@ -50,8 +50,8 @@ Route: T1 and T2 by one delegated writer (multi-file, preparation reads). One sl
 
 T1 evidence: RED with register.tsx reverted to base (11 of 25 tests failed: new branch tests plus the old newest-fallback tests); GREEN after implementing (26 of 26 pass). `claude plugin validate .` passes. `tsc -p .` goes from 17 to 27 errors, all new ones are the known TS2345 `session.start` input typing in the test file; no new error in `hooks/register.tsx`. Commit: be9c307.
 
-T2 evidence: panel empty-state wording and the README resolution section updated; the three empty-state tests assert the new text. 26 of 26 tests pass, `claude plugin validate .` passes, no new `tsc` errors. Commit: HASH2.
+T2 evidence: panel empty-state wording and the README resolution section updated; the three empty-state tests assert the new text. 26 of 26 tests pass, `claude plugin validate .` passes, no new `tsc` errors. Commit: 17aff83.
 
 ## Next step
 
-Delegate the writer, then verify.
+Verify and report.
