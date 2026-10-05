@@ -195,6 +195,12 @@ const numstat = (stdout: string) => {
   return stats
 }
 
+const statusBranch = (status: string) => {
+  const head = status.split('\n').find(line => line.startsWith('## '))?.slice(3) ?? ''
+
+  return (head.replace(/\s\[.*\]$/, '').split('...')[0] ?? '').replace(/^No commits yet on /, '')
+}
+
 const parseGit = (
   status: string,
   worktree: string,
@@ -485,12 +491,16 @@ async function baseRef($: Dollar) {
   return null
 }
 
-async function commitLog($: Dollar) {
-  const upstream = await run($, [...GIT, 'log', '@{u}..HEAD', ...LOG_FORMAT])
-  if (upstream !== null) return upstream
-  const base = await baseRef($)
+async function commitLog($: Dollar, branch: string) {
+  if (!DEFAULT_BRANCHES.includes(branch)) {
+    const base = await baseRef($)
+    if (base !== null && base.replace(/^origin\//, '') !== branch) {
+      const ahead = await run($, [...GIT, 'log', `${base}..HEAD`, ...LOG_FORMAT])
+      if (ahead !== null) return ahead
+    }
+  }
 
-  return base === null ? '' : ((await run($, [...GIT, 'log', `${base}..HEAD`, ...LOG_FORMAT])) ?? '')
+  return (await run($, [...GIT, 'log', '@{u}..HEAD', ...LOG_FORMAT])) ?? ''
 }
 
 async function refresh($: Dollar, globalDir: string) {
@@ -505,7 +515,7 @@ async function refresh($: Dollar, globalDir: string) {
   const [worktree, cached, log, others] = await Promise.all([
     run($, ['git', '--no-optional-locks', 'diff', '--numstat']),
     run($, ['git', '--no-optional-locks', 'diff', '--cached', '--numstat']),
-    commitLog($),
+    commitLog($, statusBranch(status)),
     run($, ['git', '--no-optional-locks', 'ls-files', '--others', '--exclude-standard']),
   ])
   const parsed = parseGit(status, worktree ?? '', cached ?? '', log, others ?? '')

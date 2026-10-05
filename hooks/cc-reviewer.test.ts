@@ -54,6 +54,7 @@ type Options = {
   originHead?: string | null
   baseLog?: string
   status?: string
+  upstreamLog?: string
 }
 
 const REPO_FILE = '.claude/cc-reviewer.json'
@@ -76,10 +77,11 @@ const stubEngine = (
     diffs = {},
     onRun,
     upstream = true,
-    refs = ['main'],
+    refs = [],
     originHead = null,
     baseLog = 'def5678\tAhead of main\n',
     status = STATUS,
+    upstreamLog = 'abc1234\tAdd the thing\n',
   }: Options = {},
 ) => {
   on('session.start', () => ({ cwd: '/work' }))
@@ -135,7 +137,9 @@ const stubEngine = (
     }
     if (argv.includes(' log ')) {
       if (argv.includes('@{u}..HEAD')) {
-        if (!upstream) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: no upstream' } }
+        return upstream
+          ? { value: { exitCode: 0, stdout: upstreamLog, stderr: '' } }
+          : { value: { exitCode: 128, stdout: '', stderr: 'fatal: no upstream' } }
       } else {
         return { value: { exitCode: 0, stdout: baseLog, stderr: '' } }
       }
@@ -1040,3 +1044,97 @@ test('the wheel is ignored while the settings menu is open', async ($, on) => {
   expect(await visible(ui, /abc1234/)).toBe(true)
   expect(await visible(ui, /│ row 0 *$/)).toBe(true)
 })
+
+const logs = (runs: string[]) => runs.filter(run => run.startsWith('log '))
+
+const ON_MAIN = '## main...origin/main [ahead 1]\n'
+const ON_TRUNK = '## trunk...origin/trunk\n'
+
+test('without an upstream the commits ahead of main are listed', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: ['main'] })
+
+  expect(await ui.find({ ...IN, text: /▾ Commits/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeUndefined()
+})
+
+test('without an upstream and without a main or master ref there are no commits', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: [] })
+
+  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /▾ Staged/ })).toBeDefined()
+})
+
+test('a pushed feature branch with nothing ahead of upstream still lists its commits', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: true, upstreamLog: '', refs: ['main'] })
+
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeDefined()
+})
+
+test('a feature branch with unpushed commits lists all commits since the base', async ($, on) => {
+  const ui = await openChanges($, on, {
+    upstream: true,
+    refs: ['main'],
+    upstreamLog: 'abc1234\tUnpushed one\n',
+    baseLog: 'abc1234\tUnpushed one\ndef5678\tAlready pushed\n',
+  })
+
+  expect(await ui.find({ ...IN, text: /Unpushed one/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Already pushed/ })).toBeDefined()
+})
+
+test('on the default branch only the upstream range runs', async ($, on) => {
+  const runs: string[] = []
+  const ui = await openChanges($, on, {
+    status: ON_MAIN,
+    upstream: true,
+    refs: ['main', 'origin/main'],
+    onRun: run => runs.push(run),
+  })
+
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+  expect(runs.some(run => run.includes('rev-parse') || run.includes('symbolic-ref'))).toBe(false)
+  expect(logs(runs).every(run => run.includes('@{u}..HEAD'))).toBe(true)
+})
+
+test('on a default branch that is not main the upstream range is used too', async ($, on) => {
+  const ui = await openChanges($, on, {
+    status: ON_TRUNK,
+    upstream: true,
+    originHead: 'origin/trunk',
+    refs: ['origin/trunk'],
+  })
+
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+})
+
+test('without a resolvable base the upstream range is used', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: true, refs: [] })
+
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+})
+
+test('HEAD sitting on the base shows no commits', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: ['main'], baseLog: '' })
+
+  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
+})
+
+for (const [name, refs, originHead, base] of [
+  ['the target of origin/HEAD', ['origin/trunk', 'origin/main', 'main'], 'origin/trunk', 'origin/trunk'],
+  ['origin/main before main', ['main', 'origin/main'], null, 'origin/main'],
+  ['main before origin/master', ['master', 'origin/master', 'main'], null, 'main'],
+  ['origin/master before master', ['master', 'origin/master'], null, 'origin/master'],
+  ['master as the last resort', ['master'], null, 'master'],
+] as const) {
+  test(`the base is ${name}`, async ($, on) => {
+    const runs: string[] = []
+    await openChanges($, on, { upstream: true, refs: [...refs], originHead, onRun: run => runs.push(run) })
+
+    expect(logs(runs).filter(run => !run.includes('@{u}'))).toContain(`log ${base}..HEAD --format=%h%x09%s -n 20`)
+  })
+}
