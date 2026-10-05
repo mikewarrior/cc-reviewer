@@ -227,7 +227,7 @@ test('says so when there is no plan or no git repository', async ($, on) => {
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan found in odd\/tasks/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in odd\/tasks/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
   await ui.key({ ...IN, key: '2' })
   expect(await ui.find({ ...IN, text: /Not a git repository/ })).toBeDefined()
@@ -331,7 +331,7 @@ test("Claude's default folder shows only the session plan, never the newest", as
   const ui = await mountPane($)
 
   expect(await ui.find({ ...IN, text: /Other project/ })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: /No plan for this session/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
 
   await ui.unmount()
@@ -387,7 +387,7 @@ test('main shows the empty state even when the folder holds files', async ($, on
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan found in/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /Foo plan|Bar plan/ })).toBeUndefined()
 })
 
@@ -454,7 +454,7 @@ for (const branch of ['main', 'feat/other']) {
     const ui = await mountPane($)
 
     expect(await ui.find({ ...IN, text: /Bar plan/ })).toBeUndefined()
-    expect(await ui.find({ ...IN, text: /No plan found in/ })).toBeDefined()
+    expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
   })
 }
 
@@ -467,7 +467,7 @@ test('the branch memory is ignored when its file left the folder', async ($, on)
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan found in/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
 })
 
 for (const branch of ['main', 'master']) {
@@ -494,7 +494,7 @@ for (const branch of ['', null]) {
     await $.session.start({ cwd: '/work' })
     const ui = await mountPane($)
 
-    expect(await ui.find({ ...IN, text: /No plan found in/ })).toBeDefined()
+    expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
     expect(await ui.find({ ...IN, text: /Foo plan|Bar plan/ })).toBeUndefined()
     await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/bar.md' })
     expect(saved).not.toContain('branchPlans')

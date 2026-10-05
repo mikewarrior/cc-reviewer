@@ -183,11 +183,10 @@ const SOURCE_NOTE: Record<PlanSource, string> = {
 
 const emptyPlan = (search: PanelProps['search']) => {
   const dir = search?.dir ?? 'the plan folder'
-  const found = search?.source === 'default' ? `No plan for this session in ${dir}.` : `No plan found in ${dir}.`
   const note = search ? ` (${SOURCE_NOTE[search.source]})` : ''
 
   return [
-    `${found.slice(0, -1)}${note}.`,
+    `No plan found for this session or branch in ${dir}${note}.`,
     'To read another folder, set "planDir" in .claude/cc-reviewer.json, for example { "planDir": "odd/tasks" }.',
   ]
 }
