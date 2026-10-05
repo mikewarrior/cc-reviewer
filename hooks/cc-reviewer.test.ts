@@ -49,6 +49,10 @@ type Options = {
   store?: Record<string, unknown>
   diffs?: Record<string, string | { exitCode: number; stdout: string }>
   onRun?: (argv: string) => void
+  upstream?: boolean
+  refs?: string[]
+  originHead?: string | null
+  baseLog?: string
 }
 
 const REPO_FILE = '.claude/cc-reviewer.json'
@@ -70,6 +74,10 @@ const stubEngine = (
     store = {},
     diffs = {},
     onRun,
+    upstream = true,
+    refs = ['main'],
+    originHead = null,
+    baseLog = 'def5678\tAhead of main\n',
   }: Options = {},
 ) => {
   on('session.start', () => ({ cwd: '/work' }))
@@ -112,6 +120,23 @@ const stubEngine = (
       const { exitCode, stdout } = typeof diff === 'string' ? { exitCode: 0, stdout: diff } : diff
 
       return { value: { exitCode, stdout, stderr: '' } }
+    }
+    if (argv.includes('symbolic-ref')) {
+      return originHead === null
+        ? { value: { exitCode: 128, stdout: '', stderr: 'fatal' } }
+        : { value: { exitCode: 0, stdout: `${originHead}\n`, stderr: '' } }
+    }
+    if (argv.includes('rev-parse')) {
+      const found = refs.includes(e.argv[e.argv.length - 1]!)
+
+      return { value: { exitCode: found ? 0 : 1, stdout: found ? 'cafe123\n' : '', stderr: '' } }
+    }
+    if (argv.includes(' log ')) {
+      if (argv.includes('@{u}..HEAD')) {
+        if (!upstream) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: no upstream' } }
+      } else {
+        return { value: { exitCode: 0, stdout: baseLog, stderr: '' } }
+      }
     }
     if (argv.includes('--show-current')) {
       if (branch === null) return { value: { exitCode: 128, stdout: '', stderr: 'fatal' } }
@@ -788,3 +813,51 @@ test('diff lines are colored: added green, removed red, hunks cyan, file headers
   expect(tree).toContain(colored('gray', '+++ b/a.ts'))
   expect(tree).toContain(colored('gray', 'index 1111111..2222222 100644'))
 })
+
+const logs = (runs: string[]) => runs.filter(run => run.startsWith('log '))
+
+test('without an upstream the commits ahead of main are listed', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: ['main'] })
+
+  expect(await ui.find({ ...IN, text: /▾ Commits/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeUndefined()
+})
+
+test('without an upstream and without a main or master ref there are no commits', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: [] })
+
+  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /▾ Staged/ })).toBeDefined()
+})
+
+test('an upstream still wins over the default branch', async ($, on) => {
+  const runs: string[] = []
+  const ui = await openChanges($, on, { upstream: true, refs: ['main'], onRun: run => runs.push(run) })
+
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
+  expect(runs.some(run => run.includes('rev-parse') || run.includes('symbolic-ref'))).toBe(false)
+})
+
+test('HEAD sitting on the base shows no commits', async ($, on) => {
+  const ui = await openChanges($, on, { upstream: false, refs: ['main'], baseLog: '' })
+
+  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
+})
+
+for (const [name, refs, originHead, base] of [
+  ['the target of origin/HEAD', ['origin/trunk', 'origin/main', 'main'], 'origin/trunk', 'origin/trunk'],
+  ['origin/main before main', ['main', 'origin/main'], null, 'origin/main'],
+  ['main before origin/master', ['master', 'origin/master', 'main'], null, 'main'],
+  ['origin/master before master', ['master', 'origin/master'], null, 'origin/master'],
+  ['master as the last resort', ['master'], null, 'master'],
+] as const) {
+  test(`the base is ${name}`, async ($, on) => {
+    const runs: string[] = []
+    await openChanges($, on, { upstream: false, refs: [...refs], originHead, onRun: run => runs.push(run) })
+
+    expect(logs(runs).filter(run => !run.includes('@{u}'))).toContain(`log ${base}..HEAD --format=%h%x09%s -n 20`)
+  })
+}

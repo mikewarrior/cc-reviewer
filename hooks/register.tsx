@@ -23,6 +23,8 @@ const BRANCH_PLANS = 'branchPlans'
 const DEFAULT_BRANCHES = ['main', 'master']
 const DIFF_LINES = 200
 const GIT = ['git', '--no-optional-locks']
+const BASE_REFS = ['origin/main', 'main', 'origin/master', 'master']
+const LOG_FORMAT = ['--format=%h%x09%s', '-n', '20']
 const SHA = /^[0-9a-f]{4,40}$/i
 
 const plan = atom({ plugin: 'cc-reviewer', key: 'plan' } as const, null)
@@ -473,6 +475,23 @@ async function refreshPlan($: Dollar, globalDir: string) {
   await update($, runningSince, () => since)
 }
 
+async function baseRef($: Dollar) {
+  const head = trimmed(await run($, [...GIT, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))
+  for (const ref of head === '' ? BASE_REFS : [head, ...BASE_REFS]) {
+    if ((await run($, [...GIT, 'rev-parse', '--verify', '--quiet', ref])) !== null) return ref
+  }
+
+  return null
+}
+
+async function commitLog($: Dollar) {
+  const upstream = await run($, [...GIT, 'log', '@{u}..HEAD', ...LOG_FORMAT])
+  if (upstream !== null) return upstream
+  const base = await baseRef($)
+
+  return base === null ? '' : ((await run($, [...GIT, 'log', `${base}..HEAD`, ...LOG_FORMAT])) ?? '')
+}
+
 async function refresh($: Dollar, globalDir: string) {
   await refreshPlan($, globalDir)
 
@@ -485,10 +504,10 @@ async function refresh($: Dollar, globalDir: string) {
   const [worktree, cached, log, others] = await Promise.all([
     run($, ['git', '--no-optional-locks', 'diff', '--numstat']),
     run($, ['git', '--no-optional-locks', 'diff', '--cached', '--numstat']),
-    run($, ['git', '--no-optional-locks', 'log', '@{u}..HEAD', '--format=%h%x09%s', '-n', '20']),
+    commitLog($),
     run($, ['git', '--no-optional-locks', 'ls-files', '--others', '--exclude-standard']),
   ])
-  const parsed = parseGit(status, worktree ?? '', cached ?? '', log ?? '', others ?? '')
+  const parsed = parseGit(status, worktree ?? '', cached ?? '', log, others ?? '')
   await setGit($, parsed)
   await refreshDiffs($, parsed)
 }
