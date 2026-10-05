@@ -24,6 +24,8 @@ type State = {
   settings: Settings
   frame: number
 }
+type DiffTone = 'add' | 'del' | 'ctx' | 'hunk' | 'file' | 'note'
+type DiffEntry = { tone: DiffTone; oldNo?: number; newNo?: number; mark: string; text: string }
 type Row = {
   id: string
   kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'diff' | 'gap'
@@ -41,6 +43,11 @@ type Row = {
   file?: GitFile
   sha?: string
   isTasks?: boolean
+  tone?: DiffTone
+  oldNo?: number
+  newNo?: number
+  mark?: string
+  numW?: number
 }
 
 const SURFACE = 'ansi256(236)'
@@ -62,6 +69,14 @@ const STATUS_COLOR: Record<string, string> = {
   R: 'cyan',
   C: 'cyan',
   '?': 'cyan',
+}
+
+const TINT: Record<Exclude<DiffTone, 'note'>, [string, string]> = {
+  add: ['#2b4538', '#38594a'],
+  del: ['#472b36', '#5a3745'],
+  ctx: ['#0e2a35', '#17394a'],
+  hunk: ['#14303c', '#1f4254'],
+  file: ['#1b3a4a', '#27506a'],
 }
 
 const icons = (nerd: boolean) =>
@@ -212,26 +227,86 @@ const fileCount = (props: PanelProps) =>
     ),
   ).size
 
-const diffRows = (parent: string, diff: Diff | undefined): Row[] => {
-  const note = (id: string, text: string): Row => ({ id: `d:${parent}:${id}`, kind: 'diff', parent, text, color: DIM })
-  if (!diff) return [note('wait', 'loading diff…')]
-  if (diff.lines.length === 0) return [note('none', 'no textual changes')]
-  let inHunk = false
-  const rows = diff.lines.map((line, i): Row => {
-    if (line.startsWith('diff --git ')) inHunk = false
-    if (line.startsWith('@@')) inHunk = true
-    const color = line.startsWith('@@')
-      ? 'cyan'
-      : !inHunk || line.startsWith('\\')
-        ? DIM
-        : line.startsWith('+')
-          ? 'green'
-          : line.startsWith('-')
-            ? 'red'
-            : undefined
+const diffPath = (line: string) => {
+  const rest = line.replace(/^diff --\w+ /, '')
+  const half = (rest.length - 5) / 2
+  if (Number.isInteger(half) && rest.slice(2, 2 + half) === rest.slice(half + 5)) return rest.slice(2, 2 + half)
+  const names = /^a\/(.+) b\/(.+)$/.exec(rest)
 
-    return { id: `d:${parent}:${i}`, kind: 'diff', parent, text: line.replace(/\t/g, '  '), color }
+  return names ? `${names[1]} → ${names[2]}` : rest
+}
+
+const diffEntries = (lines: string[], files: boolean): DiffEntry[] => {
+  const out: DiffEntry[] = []
+  let oldNo: number | undefined
+  let newNo: number | undefined
+  let inHunk = false
+  for (const line of lines) {
+    if (line.startsWith('diff --')) {
+      inHunk = false
+      if (files) out.push({ tone: 'file', mark: '', text: diffPath(line) })
+    } else if (line.startsWith('@@')) {
+      const at = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+      oldNo = at ? Number(at[1]) : undefined
+      newNo = at ? Number(at[2]) : undefined
+      inHunk = true
+      out.push({ tone: 'hunk', mark: '', text: line })
+    } else if (!inHunk) {
+      if (line.startsWith('Binary files ')) out.push({ tone: 'note', mark: '', text: line })
+    } else if (line.startsWith('\\')) {
+      out.push({ tone: 'note', mark: '', text: line })
+    } else if (line.startsWith('+')) {
+      out.push({ tone: 'add', newNo, mark: '+', text: line.slice(1).replace(/\t/g, '  ') })
+      if (newNo !== undefined) newNo++
+    } else if (line.startsWith('-')) {
+      out.push({ tone: 'del', oldNo, mark: '-', text: line.slice(1).replace(/\t/g, '  ') })
+      if (oldNo !== undefined) oldNo++
+    } else {
+      out.push({ tone: 'ctx', oldNo, newNo, mark: ' ', text: line.slice(1).replace(/\t/g, '  ') })
+      if (oldNo !== undefined) oldNo++
+      if (newNo !== undefined) newNo++
+    }
+  }
+
+  return out
+}
+
+const pieces = (text: string, size: number) => {
+  const out: string[] = []
+  for (let at = 0; at === 0 || at < text.length; at += size) out.push(text.slice(at, at + size))
+
+  return out
+}
+
+const diffRows = (parent: string, diff: Diff | undefined, files: boolean, width: number): Row[] => {
+  const note = (id: string, text: string): Row => ({ id: `d:${parent}:${id}`, kind: 'diff', parent, tone: 'note', text })
+  if (!diff) return [note('wait', 'loading diff…')]
+  const entries = diffEntries(diff.lines, files)
+  const highest = entries.reduce((n, entry) => Math.max(n, entry.oldNo ?? 0, entry.newNo ?? 0), 0)
+  const numW = Math.max(2, String(highest).length)
+  const size = Math.max(8, width - 9 - numW * 2)
+  const rows: Row[] = []
+  entries.forEach((entry, i) => {
+    if (entry.tone === 'note') {
+      rows.push({ id: `d:${parent}:${i}`, kind: 'diff', parent, tone: 'note', text: entry.text })
+
+      return
+    }
+    pieces(entry.text, size).forEach((part, k) => {
+      rows.push({
+        id: `d:${parent}:${i}:${k}`,
+        kind: 'diff',
+        parent,
+        tone: entry.tone,
+        text: part,
+        oldNo: k === 0 ? entry.oldNo : undefined,
+        newNo: k === 0 ? entry.newNo : undefined,
+        mark: k === 0 ? entry.mark : '',
+        numW,
+      })
+    })
   })
+  if (rows.length === 0) return [note('none', 'no textual changes')]
   if (diff.more > 0) rows.push(note('more', `${diff.more} more lines`))
 
   return rows
@@ -289,14 +364,14 @@ const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
           const foldable = file.count === null
           const shown = foldable && (st.fold[rowId] ?? false)
           rows.push({ id: rowId, kind: 'file', parent: id, file, foldable, open: shown })
-          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId]))
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId], false, width))
         }
       } else {
         for (const commit of git?.commits ?? []) {
           const rowId = `c:${commit.sha}`
           const shown = st.fold[rowId] ?? false
           rows.push({ id: rowId, kind: 'commit', parent: id, sha: commit.sha, text: commit.subject, foldable: true, open: shown })
-          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId]))
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId], true, width))
         }
       }
     }
@@ -539,7 +614,8 @@ const rowLine = (
   if (row.kind === 'gap') return [{ t: ' ' }]
   const layout = st.settings.layout
   const ic = icons(st.settings.nerdFont)
-  const bg = isCursor ? SEL : undefined
+  const tint = row.kind === 'diff' && row.tone !== undefined && row.tone !== 'note' ? TINT[row.tone][isCursor ? 1 : 0] : undefined
+  const bg = tint ?? (isCursor ? SEL : undefined)
   const spin = SPINNER[st.frame % SPINNER.length]!
   const act = `row:${index}`
   const body = width - 1
@@ -634,8 +710,17 @@ const rowLine = (
       { t: row.text ?? '' },
     ]
   } else if (row.kind === 'diff') {
-    gutter = SURFACE
-    left = [{ t: '    ' }, { t: row.text ?? '', fg: row.color }]
+    gutter = tint ?? SURFACE
+    if (tint === undefined) {
+      left = [{ t: '    ' }, { t: row.text ?? '', fg: DIM }]
+    } else {
+      const w = row.numW ?? 2
+      const num = (n?: number) => (n === undefined ? ' '.repeat(w) : String(n).padStart(w))
+      left = [
+        { t: `  ${num(row.oldNo)} ${num(row.newNo)} ${row.mark || ' '}│ `, fg: DIM },
+        { t: row.text ?? '', fg: row.tone === 'hunk' ? DIM : undefined, bold: row.tone === 'file' },
+      ]
+    }
   }
 
   const marker: Seg =
@@ -643,7 +728,7 @@ const rowLine = (
       ? { t: '▎', fg: isCursor ? 'blue' : gutter, bg }
       : isCursor
         ? { t: '▌', fg: 'blue', bg }
-        : { t: ' ' }
+        : { t: ' ', bg }
   const line = lr(withBg(left, bg), withBg(right, bg), body - 1, bg)
 
   return [{ ...marker, act }, ...line.map(seg => ({ ...seg, act: seg.act ?? act })), { t: ' ', bg, act }]

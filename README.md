@@ -5,7 +5,7 @@ A Claude Code mod (plugin id `cc-reviewer`): a side pane with two tabs.
 ![The cc-reviewer pane beside a Claude Code session, showing the Plan tab](docs/screenshot.png)
 
 - **Plan** shows the plan markdown of your session as collapsible sections, with task progress and the running task's elapsed time.
-- **Changes** shows git changes grouped as Commits (ahead of upstream, or of the default branch when there is no upstream), Staged, Unstaged and Untracked, with `+/−` stats. Expand a commit or a file to read its diff right under the row: `+` lines in green, `-` lines in red, hunk headers in cyan and file headers dim. Long diffs stop after 200 lines with a note counting the rest.
+- **Changes** shows git changes grouped as Commits (ahead of upstream, or of the default branch when there is no upstream), Staged, Unstaged and Untracked, with `+/−` stats. Expand a commit or a file to read its diff right under the row, laid out like a GitLab inline diff: old and new line numbers, a `+`/`-` marker, and a full-width tint (green for added, red for removed, blue for context lines) with dim hunk headers. A commit diff gets one header row per file. Long lines wrap onto continuation rows, and a diff stops after 200 source lines with a note counting the rest. The tints are truecolor (`#rrggbb`) values.
 
 Three layouts (**Outline**, **Powerline**, **Focus**) and an optional Nerd Font icon set are chosen in the settings menu. The choice is saved between sessions. Colors use ANSI slots, so the pane follows your terminal theme.
 

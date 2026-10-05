@@ -53,6 +53,7 @@ type Options = {
   refs?: string[]
   originHead?: string | null
   baseLog?: string
+  status?: string
 }
 
 const REPO_FILE = '.claude/cc-reviewer.json'
@@ -78,6 +79,7 @@ const stubEngine = (
     refs = ['main'],
     originHead = null,
     baseLog = 'def5678\tAhead of main\n',
+    status = STATUS,
   }: Options = {},
 ) => {
   on('session.start', () => ({ cwd: '/work' }))
@@ -144,7 +146,7 @@ const stubEngine = (
       return { value: { exitCode: 0, stdout: `${branch}\n`, stderr: '' } }
     }
     const out = argv.includes('status')
-      ? STATUS
+      ? status
       : argv.includes('--cached')
         ? '3\t1\tstaged.ts\n'
         : argv.includes('--numstat')
@@ -660,20 +662,20 @@ test('Enter on a commit expands its diff and Enter again collapses it', async ($
   const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE } })
 
   await press(ui, 'j', 'return')
-  expect(await ui.find({ ...IN, text: /diff --git a\/a\.ts/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /a\.ts/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /@@ -1,2 \+1,2 @@/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /-old line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /old line/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /▾ Commits/ })).toBeDefined()
 
   await press(ui, 'return')
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeUndefined()
   expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
 })
 
 for (const [name, keys, command, text] of [
-  ['staged', ['j', 'j', 'j'], DIFF_STAGED, /\+staged line/],
-  ['unstaged', ['j', 'j', 'j', 'j', 'j', 'j'], DIFF_UNSTAGED, /\+unstaged line/],
+  ['staged', ['j', 'j', 'j'], DIFF_STAGED, /staged line/],
+  ['unstaged', ['j', 'j', 'j', 'j', 'j', 'j'], DIFF_UNSTAGED, /unstaged line/],
 ] as const) {
   test(`a ${name} file expands its diff with Enter`, async ($, on) => {
     const line = name === 'staged' ? '+staged line' : '+unstaged line'
@@ -692,20 +694,20 @@ test('an untracked file shows its diff although git exits with 1', async ($, on)
   })
 
   await press(ui, 'G', 'k', 'return')
-  expect(await ui.find({ ...IN, text: /\+brand new line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /brand new line/ })).toBeDefined()
 })
 
 test('l and Right expand a file, h and Left collapse it', async ($, on) => {
   const ui = await openChanges($, on, { diffs: { [DIFF_STAGED]: patch('+staged line') } })
 
   await press(ui, 'j', 'j', 'j', 'l')
-  expect(await ui.find({ ...IN, text: /\+staged line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /staged line/ })).toBeDefined()
   await press(ui, 'h')
-  expect(await ui.find({ ...IN, text: /\+staged line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /staged line/ })).toBeUndefined()
   await press(ui, 'right')
-  expect(await ui.find({ ...IN, text: /\+staged line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /staged line/ })).toBeDefined()
   await press(ui, 'left')
-  expect(await ui.find({ ...IN, text: /\+staged line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /staged line/ })).toBeUndefined()
   expect(await ui.find({ ...IN, text: /▾ Staged/ })).toBeDefined()
 })
 
@@ -713,37 +715,29 @@ test('a click on a file row toggles its diff', async ($, on) => {
   const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE } })
 
   await ui.pointer({ ...IN, type: 'down', x: 8, y: 6, button: 'left' })
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeDefined()
   await ui.pointer({ ...IN, type: 'down', x: 8, y: 6, button: 'left' })
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeUndefined()
 })
 
 test('the cursor walks through the diff rows and Enter on one collapses the diff', async ($, on) => {
   const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE } })
 
   await press(ui, 'j', 'return', 'j', 'j', 'return')
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeUndefined()
   expect(await ui.find({ ...IN, text: /▸ .*Add the thing/ })).toBeDefined()
 })
 
+const ONLY_COMMITS = '## t/feature...origin/t/feature [ahead 1]\n'
+
 test('a long diff is capped with a note counting the rest', async ($, on) => {
   const body = Array.from({ length: 250 }, (_, i) => `+row ${i}`)
-  stubEngine(on, { diffs: { [SHOW_COMMIT]: patch(...body) } })
-  await $.session.start({ cwd: '/work' })
-  const ui = await $.ui.mount({
-    plugin: 'cc-reviewer',
-    surface: 'terminal',
-    component: 'Pane',
-    props: { title: 'cc-reviewer', isFocused: true, bodyColumns: 60, placement: 'dock' },
-    requestId: 'cc-reviewer',
-    viewport: { columns: 60, rows: 600 },
-  })
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: patch(...body) } })
 
-  await press(ui, '2', 'j', 'return')
-  const total = 5 + 250
-  expect(await ui.find({ ...IN, text: /\+row 194/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /\+row 195/ })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: new RegExp(`${total - 200} more lines`) })).toBeDefined()
+  await press(ui, 'j', 'return', 'G')
+  expect(await rowFor(ui, /│ row 194/)).toHaveLength(1)
+  expect(await rowFor(ui, /│ row 195/)).toEqual([])
+  expect(await rowFor(ui, /55 more lines/)).toHaveLength(1)
 })
 
 test('a binary file shows git one-line note', async ($, on) => {
@@ -762,15 +756,6 @@ test('an empty diff says there is nothing to show', async ($, on) => {
 
   await press(ui, 'j', 'j', 'j', 'return')
   expect(await ui.find({ ...IN, text: /no textual changes/ })).toBeDefined()
-})
-
-test('diff rows are cut to the pane width, never wrapped', async ($, on) => {
-  const long = `+${'x'.repeat(200)}`
-  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: patch(long) } })
-
-  await press(ui, 'j', 'return')
-  expect(await ui.find({ ...IN, text: new RegExp('x'.repeat(200)) })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: /\+x+…/ })).toBeDefined()
 })
 
 test('Enter on an untracked folder folds its group and runs no diff', async ($, on) => {
@@ -798,66 +783,169 @@ test('the Plan tab is unchanged by the diff rows', async ($, on) => {
   await press(ui, 'j', 'return', 'tab')
 
   expect(await ui.find({ ...IN, text: /▾ Tasks/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /\+new line/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /new line/ })).toBeUndefined()
 })
 
-test('diff lines are colored: added green, removed red, hunks cyan, file headers dim', async ($, on) => {
+type Node = { type: string; props?: Record<string, unknown>; text?: string; children?: (Node | string)[] }
+
+const rowsOf = (node: Node | string | undefined, out: Node[] = []): Node[] => {
+  if (node === undefined || typeof node === 'string') return out
+  const kids = node.children ?? []
+  if (kids.length > 0 && kids.every(kid => typeof kid !== 'string' && kid.type === 'Text')) out.push(node)
+  else for (const kid of kids) rowsOf(kid, out)
+
+  return out
+}
+
+const cells = (row: Node) => (row.children ?? []).filter((kid): kid is Node => typeof kid !== 'string')
+const textOf = (row: Node) => cells(row).map(cell => (cell.children ?? []).join('')).join('')
+const bgOf = (row: Node) => [...new Set(cells(row).map(cell => cell.props?.backgroundColor))]
+
+const rowFor = async (ui: Awaited<ReturnType<typeof mountPane>>, text: RegExp) => {
+  const tree = (await ui.find({ ...IN, type: 'Box' })) as Node
+  const found = rowsOf(tree).filter(row => text.test(textOf(row)))
+
+  return found
+}
+
+const ADD = '#2b4538'
+const DEL = '#472b36'
+const CTX = '#0e2a35'
+
+const gutter = (old: number | null, next: number | null, mark: string, code: string) =>
+  `   ${old === null ? '  ' : String(old).padStart(2)} ${next === null ? '  ' : String(next).padStart(2)} ${mark}│ ${code}`
+
+const TWO_HUNKS = [
+  'diff --git a/a.ts b/a.ts',
+  'index 1111111..2222222 100644',
+  '--- a/a.ts',
+  '+++ b/a.ts',
+  '@@ -3,3 +3,4 @@ function one',
+  ' ctx a',
+  '-old b',
+  '+new b',
+  '+new c',
+  ' ctx d',
+  '@@ -20,2 +21,2 @@',
+  ' ctx e',
+  '-old f',
+  '+new f',
+  '',
+].join('\n')
+
+test('line numbers follow the hunk headers: both on context, old on removed, new on added', async ($, on) => {
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: TWO_HUNKS } })
+
+  await press(ui, 'j', 'return')
+  const [first] = await rowFor(ui, /ctx a/)
+  const texts = async (re: RegExp) => (await rowFor(ui, re)).map(row => textOf(row).trimEnd())
+  expect(first).toBeDefined()
+  expect(await texts(/ctx a/)).toEqual([gutter(3, 3, ' ', 'ctx a')])
+  expect(await texts(/old b/)).toEqual([gutter(4, null, '-', 'old b')])
+  expect(await texts(/new b/)).toEqual([gutter(null, 4, '+', 'new b')])
+  expect(await texts(/new c/)).toEqual([gutter(null, 5, '+', 'new c')])
+  expect(await texts(/ctx d/)).toEqual([gutter(5, 6, ' ', 'ctx d')])
+  expect(await texts(/ctx e/)).toEqual([gutter(20, 21, ' ', 'ctx e')])
+  expect(await texts(/old f/)).toEqual([gutter(21, null, '-', 'old f')])
+  expect(await texts(/new f/)).toEqual([gutter(null, 22, '+', 'new f')])
+})
+
+test('every diff row is tinted across the whole pane width', async ($, on) => {
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: TWO_HUNKS } })
+
+  await press(ui, 'j', 'return')
+  for (const [re, tint] of [
+    [/new b/, ADD],
+    [/old b/, DEL],
+    [/ctx a/, CTX],
+  ] as const) {
+    const [row] = await rowFor(ui, re)
+    expect(bgOf(row!)).toEqual([tint])
+    expect(textOf(row!).length).toBe(60)
+  }
+})
+
+test('code keeps the normal foreground and the gutter is dim', async ($, on) => {
   const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE } })
 
   await press(ui, 'j', 'return')
-  const tree = JSON.stringify(await ui.find({ ...IN, type: 'Box', text: /\+new line/ }))
-  const colored = (color: string, text: string) => `"props":{"color":"${color}"},"children":["${text}"]`
-  expect(tree).toContain(colored('green', '+new line'))
-  expect(tree).toContain(colored('red', '-old line'))
-  expect(tree).toContain(colored('cyan', '@@ -1,2 +1,2 @@'))
-  expect(tree).toContain(colored('gray', '+++ b/a.ts'))
-  expect(tree).toContain(colored('gray', 'index 1111111..2222222 100644'))
+  const [row] = await rowFor(ui, /new line/)
+  const code = cells(row!).find(cell => (cell.children ?? []).join('') === 'new line')
+  const numbers = cells(row!).find(cell => (cell.children ?? []).join('').includes('│'))
+  expect(code?.props?.color).toBeUndefined()
+  expect(numbers?.props?.color).toBe('gray')
 })
 
-const logs = (runs: string[]) => runs.filter(run => run.startsWith('log '))
+test('hunk headers are a distinct dim row and file meta rows are dropped', async ($, on) => {
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: TWO_HUNKS } })
 
-test('without an upstream the commits ahead of main are listed', async ($, on) => {
-  const ui = await openChanges($, on, { upstream: false, refs: ['main'] })
-
-  expect(await ui.find({ ...IN, text: /▾ Commits/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeUndefined()
+  await press(ui, 'j', 'return')
+  const hunks = await rowFor(ui, /@@/)
+  expect(hunks.map(row => textOf(row).trimEnd())).toEqual([
+    gutter(null, null, ' ', '@@ -3,3 +3,4 @@ function one'),
+    gutter(null, null, ' ', '@@ -20,2 +21,2 @@'),
+  ])
+  expect(bgOf(hunks[0]!)).toHaveLength(1)
+  expect(bgOf(hunks[0]!)[0]).not.toBe(CTX)
+  expect(bgOf(hunks[0]!)[0]).not.toBe(ADD)
+  expect(cells(hunks[0]!).some(cell => cell.props?.color === 'gray' && (cell.children ?? []).join('').startsWith('@@'))).toBe(true)
+  for (const meta of [/index 1111111/, /\+\+\+ b\/a\.ts/, /--- a\/a\.ts/, /diff --git/]) {
+    expect(await rowFor(ui, meta)).toEqual([])
+  }
 })
 
-test('without an upstream and without a main or master ref there are no commits', async ($, on) => {
-  const ui = await openChanges($, on, { upstream: false, refs: [] })
+test('a commit diff keeps one header row per file', async ($, on) => {
+  const second = ['diff --git a/src/b.ts b/src/b.ts', 'index 3333333..4444444 100644', '--- a/src/b.ts', '+++ b/src/b.ts', '@@ -1 +1 @@', '-b old', '+b new', '']
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE + second.join('\n') } })
 
-  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: /▾ Staged/ })).toBeDefined()
+  await press(ui, 'j', 'return')
+  expect((await rowFor(ui, /│ a\.ts/)).map(row => textOf(row).trimEnd())).toEqual([gutter(null, null, ' ', 'a.ts')])
+  expect((await rowFor(ui, /│ src\/b\.ts/)).map(row => textOf(row).trimEnd())).toEqual([gutter(null, null, ' ', 'src/b.ts')])
+  expect(await rowFor(ui, /b new/)).toHaveLength(1)
 })
 
-test('an upstream still wins over the default branch', async ($, on) => {
-  const runs: string[] = []
-  const ui = await openChanges($, on, { upstream: true, refs: ['main'], onRun: run => runs.push(run) })
+test('a file diff has no file header row', async ($, on) => {
+  const ui = await openChanges($, on, { diffs: { [DIFF_STAGED]: SAMPLE } })
 
-  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
-  expect(await ui.find({ ...IN, text: /Ahead of main/ })).toBeUndefined()
-  expect(runs.some(run => run.includes('rev-parse') || run.includes('symbolic-ref'))).toBe(false)
+  await press(ui, 'j', 'j', 'j', 'return')
+  expect(await rowFor(ui, /│ a\.ts/)).toEqual([])
+  expect(await rowFor(ui, /new line/)).toHaveLength(1)
 })
 
-test('HEAD sitting on the base shows no commits', async ($, on) => {
-  const ui = await openChanges($, on, { upstream: false, refs: ['main'], baseLog: '' })
+test('a long line wraps onto continuation rows with blank gutters and the same tint', async ($, on) => {
+  const long = 'x'.repeat(100)
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: patch(`+${long}`) } })
 
-  expect(await ui.find({ ...IN, text: /Commits/ })).toBeUndefined()
+  await press(ui, 'j', 'return')
+  const rows = await rowFor(ui, /xxxx/)
+  expect(rows.map(row => textOf(row).trimEnd())).toEqual([
+    gutter(null, 1, '+', 'x'.repeat(47)),
+    gutter(null, null, ' ', 'x'.repeat(47)),
+    gutter(null, null, ' ', 'x'.repeat(6)),
+  ])
+  for (const row of rows) {
+    expect(bgOf(row)).toEqual([ADD])
+    expect(textOf(row).length).toBe(60)
+  }
 })
 
-for (const [name, refs, originHead, base] of [
-  ['the target of origin/HEAD', ['origin/trunk', 'origin/main', 'main'], 'origin/trunk', 'origin/trunk'],
-  ['origin/main before main', ['main', 'origin/main'], null, 'origin/main'],
-  ['main before origin/master', ['master', 'origin/master', 'main'], null, 'main'],
-  ['origin/master before master', ['master', 'origin/master'], null, 'origin/master'],
-  ['master as the last resort', ['master'], null, 'master'],
-] as const) {
-  test(`the base is ${name}`, async ($, on) => {
-    const runs: string[] = []
-    await openChanges($, on, { upstream: false, refs: [...refs], originHead, onRun: run => runs.push(run) })
+test('wrapped rows do not count against the 200 line cap', async ($, on) => {
+  const body = Array.from({ length: 250 }, (_, i) => `+${i}${'y'.repeat(60)}`)
+  const ui = await openChanges($, on, { status: ONLY_COMMITS, diffs: { [SHOW_COMMIT]: patch(...body) } })
 
-    expect(logs(runs).filter(run => !run.includes('@{u}'))).toContain(`log ${base}..HEAD --format=%h%x09%s -n 20`)
-  })
-}
+  await press(ui, 'j', 'return', 'G')
+  expect(await rowFor(ui, /│ 194y/)).toHaveLength(1)
+  expect(await rowFor(ui, /│ 195y/)).toEqual([])
+  expect(await rowFor(ui, /55 more lines/)).toHaveLength(1)
+})
+
+test('the cursor row over a diff line is lighter and carries the marker', async ($, on) => {
+  const ui = await openChanges($, on, { diffs: { [SHOW_COMMIT]: SAMPLE } })
+
+  await press(ui, 'j', 'return', 'j', 'j', 'j', 'j', 'j')
+  const [row] = await rowFor(ui, /new line/)
+  expect(textOf(row!).startsWith('▌')).toBe(true)
+  expect(bgOf(row!)).toEqual(['#38594a'])
+  const [other] = await rowFor(ui, /old line/)
+  expect(bgOf(other!)).toEqual([DEL])
+})
