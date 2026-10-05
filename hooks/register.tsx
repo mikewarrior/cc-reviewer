@@ -12,19 +12,19 @@ import type {
   Settings,
 } from '../types'
 
-const PANE = 'odd-tasks'
+const PANE = 'cc-reviewer'
 const DIR = 'odd/tasks'
 const REFRESH_MS = 4000
 const BODY_LINES = 40
 
-const plan = atom({ plugin: 'odd-tasks', key: 'plan' } as const, null)
-const git = atom({ plugin: 'odd-tasks', key: 'git' } as const, null)
-const settings = atom({ plugin: 'odd-tasks', key: 'settings' } as const, {
+const plan = atom({ plugin: 'cc-reviewer', key: 'plan' } as const, null)
+const git = atom({ plugin: 'cc-reviewer', key: 'git' } as const, null)
+const settings = atom({ plugin: 'cc-reviewer', key: 'settings' } as const, {
   layout: 'outline',
   nerdFont: false,
 })
-const active = atom({ plugin: 'odd-tasks', key: 'active' } as const, null)
-const runningSince = atom({ plugin: 'odd-tasks', key: 'runningSince' } as const, null)
+const active = atom({ plugin: 'cc-reviewer', key: 'active' } as const, null)
+const runningSince = atom({ plugin: 'cc-reviewer', key: 'runningSince' } as const, null)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
 
@@ -290,8 +290,8 @@ async function touch($: Dollar, path: string) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
-      name: 'odd-tasks',
-      description: "Show this session's ODD plan and git changes in a pane",
+      name: 'cc-reviewer',
+      description: "Show this session's plan and git changes in a pane",
     })
     const saved = (await $.store.get('settings')) as Partial<Settings> | undefined
     if (saved) {
@@ -300,16 +300,16 @@ export const register: Register = on => {
     }
     await refresh($)
     $.clock.every(REFRESH_MS, () => refresh($))
-    void $.ui.open({ id: PANE, title: 'ODD' })
+    void $.ui.open({ id: PANE, title: 'cc-reviewer' })
 
     return next(e)
   })
 
-  on('command.run', { command: 'odd-tasks' }, async $ => {
+  on('command.run', { command: 'cc-reviewer' }, async $ => {
     await refresh($)
-    await $.ui.open({ id: PANE, title: 'ODD' })
+    await $.ui.open({ id: PANE, title: 'cc-reviewer' })
 
-    return { text: 'ODD pane opened.' }
+    return { text: 'cc-reviewer pane opened.' }
   })
 
   on('tool.call', { tool: 'Read' }, async ($, e, next) => {
@@ -357,13 +357,13 @@ export const register: Register = on => {
     const { Client } = $.ui.resolve(e)
     const props: PanelProps = {
       columns: e.props.bodyColumns,
-      rows: e.viewport?.rows ?? 24,
+      rows: e.props.scroll?.bodyRows || (e.viewport?.rows ? Math.max(8, e.viewport.rows - 6) : 24),
       settings: await read($, settings),
       plan: await read($, plan),
       git: await read($, git),
       runningSince: await read($, runningSince),
     }
 
-    return <Client key="panel" module="./panel.tsx" props={props} width="100%" height="100%" />
+    return <Client key="panel" module="./panel.tsx" props={props} width="100%" height={props.rows} />
   })
 }

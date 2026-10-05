@@ -1,5 +1,5 @@
 {
-  "name": "odd-tasks",
+  "name": "cc-reviewer",
   "version": "0.1.0",
   "description": "Side pane with a Plan tab (collapsible plan markdown and tasks) and a Changes tab (git status)",
   "author": {

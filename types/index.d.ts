@@ -43,7 +43,7 @@ export type PanelProps = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'odd-tasks': {
+    'cc-reviewer': {
       plan: Plan | null
       git: Git | null
       settings: Settings

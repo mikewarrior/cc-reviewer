@@ -1,6 +1,6 @@
 # cc-reviewer
 
-A Claude Code mod (plugin id `odd-tasks`): a side pane with two tabs.
+A Claude Code mod (plugin id `cc-reviewer`): a side pane with two tabs.
 
 - **Plan** shows the plan markdown for the feature you are working on as collapsible sections, with task progress and the running task's elapsed time.
 - **Changes** shows git changes grouped as Commits (ahead of upstream), Staged, Unstaged and Untracked, with `+/−` stats.
@@ -50,7 +50,7 @@ claude --plugin-dir C:\path\to\cc-reviewer
 
 You can also set `CLAUDE_CODE_PLUGIN_DIRS` to a list of plugin folders (separated by `:` on macOS and Linux, `;` on Windows).
 
-Open the pane with `/odd-tasks`. It also opens by itself on terminals 144 columns wide or more.
+Open the pane with `/cc-reviewer`. It also opens by itself on terminals 144 columns wide or more.
 
 ## Use
 

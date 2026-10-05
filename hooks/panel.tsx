@@ -584,46 +584,45 @@ const modal = (st: State, width: number): { lines: Line[]; w: number } => {
   const w = Math.min(40, Math.max(20, width - 4))
   const inner = w - 2
   const bg = undefined
-  const rule: Line = [{ t: '─'.repeat(inner), fg: DIM }]
+  const rule: Line = [{ t: '─'.repeat(inner - 4), fg: DIM }]
   const items: Line[] = []
-  const row = (i: number, text: Line, act: string): Line => {
+  const blank: Line = [{ t: ' ' }]
+  const head = (text: string): Line => [{ t: `  ${text}`, fg: DIM }]
+  const option = (i: number, mark: Seg, label: string, note: string, act: string): Line => {
     const isCursor = st.sCursor === i
-    const line = lr(withBg(text, isCursor ? SEL : bg), [], inner - 1, isCursor ? SEL : bg)
+    const rowBg = isCursor ? SEL : bg
+    const line = lr(
+      withBg([{ t: ' ' }, mark, { t: ` ${label}` }], rowBg),
+      withBg([{ t: note, fg: DIM }, { t: ' ' }], rowBg),
+      inner - 1,
+      rowBg,
+    )
 
-    return [{ t: isCursor ? '▌' : ' ', fg: 'blue', bg: isCursor ? SEL : bg, act }, ...line.map(s => ({ ...s, act }))]
+    return [{ t: isCursor ? '▌' : ' ', fg: 'blue', bg: rowBg, act }, ...line.map(s => ({ ...s, act }))]
   }
-  items.push(lr([{ t: ` ${icons(st.settings.nerdFont).gear} Settings`, bold: true }], [{ t: 'q', fg: DIM }], inner, bg))
-  items.push([{ t: ' LAYOUT', fg: DIM }])
+  items.push(blank)
+  items.push(lr([{ t: ` ${icons(st.settings.nerdFont).gear} Settings`, fg: 'blue', bold: true }], [{ t: 's ', fg: DIM }], inner, bg))
+  items.push(head('LAYOUT'))
   LAYOUTS.forEach((id, i) => {
     const on = st.settings.layout === id
     items.push(
-      row(
-        i,
-        [
-          { t: ' ' },
-          { t: on ? '●' : '○', fg: on ? 'blue' : DIM },
-          { t: ` ${LAYOUT_INFO[id][0]}`.padEnd(13) },
-          { t: LAYOUT_INFO[id][1], fg: DIM },
-        ],
-        `set:${id}`,
-      ),
+      option(i, { t: on ? '●' : '○', fg: on ? 'blue' : DIM }, LAYOUT_INFO[id][0], LAYOUT_INFO[id][1], `set:${id}`),
     )
   })
-  items.push([{ t: ' ICONS', fg: DIM }])
+  items.push(head('ICONS'))
   items.push(
-    row(
+    option(
       3,
-      [
-        { t: ' ' },
-        { t: st.settings.nerdFont ? '[x]' : '[ ]', fg: st.settings.nerdFont ? 'blue' : DIM },
-        { t: ' Nerd Font icons ' },
-        { t: 'patched font', fg: DIM },
-      ],
+      { t: st.settings.nerdFont ? '[x]' : '[ ]', fg: st.settings.nerdFont ? 'blue' : DIM },
+      'Nerd Font icons',
+      'needs patched font',
       'set:nerd',
     ),
   )
-  items.push(rule)
+  items.push(blank)
+  items.push([{ t: '  ' }, ...rule])
   items.push(hint([['j/k', 'move'], ['⏎', 'select'], ['s', 'close']]))
+  items.push(blank)
 
   const boxed: Line[] = [
     [{ t: '╭', fg: 'blue' }, { t: '─'.repeat(inner), fg: 'blue' }, { t: '╮', fg: 'blue' }],
@@ -770,7 +769,7 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   const { Box, Text } = surface.elements
   current = props
   const width = surface.columns > 0 ? surface.columns : props.columns
-  const height = surface.rows > 0 ? surface.rows : props.rows
+  const height = surface.rows > 0 ? Math.min(surface.rows, props.rows) : props.rows
   const first = surface.state === undefined
   const st = surface.state ?? initial(props)
   if (first) {
@@ -813,7 +812,7 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
     modalRect = { x, y, w: box.w, h: box.lines.length }
     lines = lines.map((line, i) => {
       const k = i - y
-      const dimmed = line.map(seg => ({ ...seg, dim: true }))
+      const dimmed = fit(line, width).map(seg => ({ ...seg, dim: true }))
       if (k < 0 || k >= box.lines.length) return dimmed
 
       return [...slice(dimmed, 0, x), ...fit(box.lines[k]!, box.w), ...slice(dimmed, x + box.w)]
@@ -821,26 +820,35 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   }
   lastLines = lines
 
+  const draw = (line: Line) => (
+    <Box>
+      {line
+        .filter(seg => seg.t !== '')
+        .map(seg => (
+          <Text
+            color={seg.fg}
+            backgroundColor={seg.bg}
+            bold={seg.bold}
+            dimColor={seg.dim}
+            inverse={seg.inv}
+            underline={seg.ul}
+          >
+            {seg.t}
+          </Text>
+        ))}
+    </Box>
+  )
+  const top1 = head.length
+  const bottom1 = lines.length - foot.length
+
+  // The list is the only part that gives way, so the footer stays on screen even if the region is shorter than it reports.
   return (
-    <Box flexDirection="column">
-      {lines.map(line => (
-        <Box>
-          {line
-            .filter(seg => seg.t !== '')
-            .map(seg => (
-              <Text
-                color={seg.fg}
-                backgroundColor={seg.bg}
-                bold={seg.bold}
-                dimColor={seg.dim}
-                inverse={seg.inv}
-                underline={seg.ul}
-              >
-                {seg.t}
-              </Text>
-            ))}
-        </Box>
-      ))}
+    <Box flexDirection="column" height={height}>
+      {lines.slice(0, top1).map(draw)}
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} overflow="hidden">
+        {lines.slice(top1, bottom1).map(draw)}
+      </Box>
+      {lines.slice(bottom1).map(draw)}
     </Box>
   )
 }

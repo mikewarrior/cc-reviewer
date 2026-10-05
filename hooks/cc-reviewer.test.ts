@@ -77,11 +77,11 @@ const stubEngine = (on: On, { git = true, plan = true, onSave }: Options = {}) =
 
 const mountPane = ($: Dollar) =>
   $.ui.mount({
-    plugin: 'odd-tasks',
+    plugin: 'cc-reviewer',
     surface: 'terminal',
     component: 'Pane',
-    props: { title: 'ODD', isFocused: true, bodyColumns: 60, placement: 'dock' },
-    requestId: 'odd-tasks',
+    props: { title: 'cc-reviewer', isFocused: true, bodyColumns: 60, placement: 'dock' },
+    requestId: 'cc-reviewer',
     viewport: { columns: 60, rows: 30 },
   })
 
