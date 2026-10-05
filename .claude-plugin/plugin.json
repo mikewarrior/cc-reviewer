@@ -1,0 +1,13 @@
+{
+  "name": "odd-tasks",
+  "version": "0.1.0",
+  "description": "Side pane with a Plan tab (collapsible plan markdown and tasks) and a Changes tab (git status)",
+  "author": {
+    "name": "Miguel Rueda",
+    "email": "12301612+mikewarrior@users.noreply.github.com"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/mikewarrior/cc-reviewer",
+  "keywords": ["claude-code", "side-pane", "plan", "tasks", "git-status"],
+  "types": "./types/index.d.ts"
+}
