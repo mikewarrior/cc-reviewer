@@ -2,14 +2,37 @@
 
 A Claude Code mod (plugin id `cc-reviewer`): a side pane with two tabs.
 
-- **Plan** shows the plan markdown for the feature you are working on as collapsible sections, with task progress and the running task's elapsed time.
+- **Plan** shows the plan markdown of your session as collapsible sections, with task progress and the running task's elapsed time.
 - **Changes** shows git changes grouped as Commits (ahead of upstream), Staged, Unstaged and Untracked, with `+/−` stats.
 
 Three layouts (**Outline**, **Powerline**, **Focus**) and an optional Nerd Font icon set are chosen in the settings menu. The choice is saved between sessions. Colors use ANSI slots, so the pane follows your terminal theme.
 
+## Plan source
+
+The Plan tab reads Markdown files from one folder. The folder is the first of these that is set:
+
+1. `planDir` in `.claude/cc-reviewer.json` in the project.
+2. The `planDir` plugin option, which applies to every project.
+3. Claude's own plan folder: the `plansDirectory` setting if you set one, otherwise `~/.claude/plans`.
+
+The repo file looks like this. The folder is relative to the project, or absolute.
+
+```json
+{ "planDir": "odd/tasks" }
+```
+
+The plugin option is a text field in the plugin's config menu (`planDir`). Leave it empty to skip it. A repo file that is missing, is not valid JSON or has an empty `planDir` is ignored.
+
+Which file the pane shows:
+
+- In a folder you chose (1 or 2), the file this session last read, wrote or edited there. Until then, the newest `*.md` by modified time.
+- In Claude's folder (3), the plan file of this session. The pane learns it when plan mode starts, or when this session reads, writes or edits a file in that folder. If you set `plansDirectory`, it shows the newest file until the session has one. The shared `~/.claude/plans` folder holds plans from all your projects, so there the pane never falls back to the newest file.
+
+When no plan is found, the Plan tab says which folder it looked in and how to set `planDir`.
+
 ## Plan file format
 
-The pane reads Markdown files from `odd/tasks/*.md`, relative to the session's working directory.
+Plan files are Markdown.
 
 ```markdown
 # PROJ-1 - Example feature
@@ -27,7 +50,6 @@ What and why.
 
 - The first `# ` line is the title and every `## ` section becomes a collapsible block.
 - Only the `## Tasks` section gets task rows. Other sections are drawn as rendered Markdown.
-- The pane shows the file this session last read, wrote or edited. Until then it shows the newest file by modified time.
 - The first unchecked task counts as the running one, unless a task is marked `[~]`, `[>]` or `[/]`. Its elapsed time counts from when the pane first saw it running.
 
 ## Install
