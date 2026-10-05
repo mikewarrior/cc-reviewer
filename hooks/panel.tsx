@@ -1,6 +1,6 @@
 import type { ClientKeyEvent, ClientModule, ClientPointerEvent, ClientSurface } from 'claude-code'
 
-import type { GitFile, Layout, PanelProps, PlanSource, PlanTask, Settings } from '../types'
+import type { Diff, GitFile, Layout, PanelProps, PlanSource, PlanTask, Settings } from '../types'
 
 type Seg = {
   t: string
@@ -24,9 +24,11 @@ type State = {
   settings: Settings
   frame: number
 }
+type DiffTone = 'add' | 'del' | 'ctx' | 'hunk' | 'file' | 'note'
+type DiffEntry = { tone: DiffTone; oldNo?: number; newNo?: number; mark: string; text: string }
 type Row = {
   id: string
-  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'gap'
+  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'diff' | 'gap'
   parent?: string
   open?: boolean
   foldable?: boolean
@@ -41,6 +43,11 @@ type Row = {
   file?: GitFile
   sha?: string
   isTasks?: boolean
+  tone?: DiffTone
+  oldNo?: number
+  newNo?: number
+  mark?: string
+  numW?: number
 }
 
 const SURFACE = 'ansi256(236)'
@@ -62,6 +69,14 @@ const STATUS_COLOR: Record<string, string> = {
   R: 'cyan',
   C: 'cyan',
   '?': 'cyan',
+}
+
+const TINT: Record<Exclude<DiffTone, 'note'>, [string, string]> = {
+  add: ['#2b4538', '#38594a'],
+  del: ['#472b36', '#5a3745'],
+  ctx: ['#0e2a35', '#17394a'],
+  hunk: ['#14303c', '#1f4254'],
+  file: ['#1b3a4a', '#27506a'],
 }
 
 const icons = (nerd: boolean) =>
@@ -97,6 +112,7 @@ let current: PanelProps
 let lastLines: Line[] = []
 let listHeight = 1
 let modalRect = { x: 0, y: 0, w: 0, h: 0 }
+let wheelSeen = 0
 
 const len = (line: Line) => line.reduce((n, seg) => n + seg.t.length, 0)
 
@@ -212,6 +228,91 @@ const fileCount = (props: PanelProps) =>
     ),
   ).size
 
+const diffPath = (line: string) => {
+  const rest = line.replace(/^diff --\w+ /, '')
+  const half = (rest.length - 5) / 2
+  if (Number.isInteger(half) && rest.slice(2, 2 + half) === rest.slice(half + 5)) return rest.slice(2, 2 + half)
+  const names = /^a\/(.+) b\/(.+)$/.exec(rest)
+
+  return names ? `${names[1]} → ${names[2]}` : rest
+}
+
+const diffEntries = (lines: string[], files: boolean): DiffEntry[] => {
+  const out: DiffEntry[] = []
+  let oldNo: number | undefined
+  let newNo: number | undefined
+  let inHunk = false
+  for (const line of lines) {
+    if (line.startsWith('diff --')) {
+      inHunk = false
+      if (files) out.push({ tone: 'file', mark: '', text: diffPath(line) })
+    } else if (line.startsWith('@@')) {
+      const at = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+      oldNo = at ? Number(at[1]) : undefined
+      newNo = at ? Number(at[2]) : undefined
+      inHunk = true
+      out.push({ tone: 'hunk', mark: '', text: line })
+    } else if (!inHunk) {
+      if (line.startsWith('Binary files ')) out.push({ tone: 'note', mark: '', text: line })
+    } else if (line.startsWith('\\')) {
+      out.push({ tone: 'note', mark: '', text: line })
+    } else if (line.startsWith('+')) {
+      out.push({ tone: 'add', newNo, mark: '+', text: line.slice(1).replace(/\t/g, '  ') })
+      if (newNo !== undefined) newNo++
+    } else if (line.startsWith('-')) {
+      out.push({ tone: 'del', oldNo, mark: '-', text: line.slice(1).replace(/\t/g, '  ') })
+      if (oldNo !== undefined) oldNo++
+    } else {
+      out.push({ tone: 'ctx', oldNo, newNo, mark: ' ', text: line.slice(1).replace(/\t/g, '  ') })
+      if (oldNo !== undefined) oldNo++
+      if (newNo !== undefined) newNo++
+    }
+  }
+
+  return out
+}
+
+const pieces = (text: string, size: number) => {
+  const out: string[] = []
+  for (let at = 0; at === 0 || at < text.length; at += size) out.push(text.slice(at, at + size))
+
+  return out
+}
+
+const diffRows = (parent: string, diff: Diff | undefined, files: boolean, width: number): Row[] => {
+  const note = (id: string, text: string): Row => ({ id: `d:${parent}:${id}`, kind: 'diff', parent, tone: 'note', text })
+  if (!diff) return [note('wait', 'loading diff…')]
+  const entries = diffEntries(diff.lines, files)
+  const highest = entries.reduce((n, entry) => Math.max(n, entry.oldNo ?? 0, entry.newNo ?? 0), 0)
+  const numW = Math.max(2, String(highest).length)
+  const size = Math.max(8, width - 9 - numW * 2)
+  const rows: Row[] = []
+  entries.forEach((entry, i) => {
+    if (entry.tone === 'note') {
+      rows.push({ id: `d:${parent}:${i}`, kind: 'diff', parent, tone: 'note', text: entry.text })
+
+      return
+    }
+    pieces(entry.text, size).forEach((part, k) => {
+      rows.push({
+        id: `d:${parent}:${i}:${k}`,
+        kind: 'diff',
+        parent,
+        tone: entry.tone,
+        text: part,
+        oldNo: k === 0 ? entry.oldNo : undefined,
+        newNo: k === 0 ? entry.newNo : undefined,
+        mark: k === 0 ? entry.mark : '',
+        numW,
+      })
+    })
+  })
+  if (rows.length === 0) return [note('none', 'no textual changes')]
+  if (diff.more > 0) rows.push(note('more', `${diff.more} more lines`))
+
+  return rows
+}
+
 const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
   const rows: Row[] = []
   if (st.tab === 'plan') {
@@ -259,10 +360,19 @@ const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
       rows.push({ id, kind: 'group', foldable: true, open, title, color, count })
       if (!open) continue
       if (files) {
-        for (const file of files) rows.push({ id: `f:${key}:${file.path}`, kind: 'file', parent: id, file })
+        for (const file of files) {
+          const rowId = `f:${key}:${file.path}`
+          const foldable = file.count === null
+          const shown = foldable && (st.fold[rowId] ?? false)
+          rows.push({ id: rowId, kind: 'file', parent: id, file, foldable, open: shown })
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId], false, width))
+        }
       } else {
         for (const commit of git?.commits ?? []) {
-          rows.push({ id: `c:${commit.sha}`, kind: 'commit', parent: id, sha: commit.sha, text: commit.subject })
+          const rowId = `c:${commit.sha}`
+          const shown = st.fold[rowId] ?? false
+          rows.push({ id: rowId, kind: 'commit', parent: id, sha: commit.sha, text: commit.subject, foldable: true, open: shown })
+          if (shown) rows.push(...diffRows(rowId, props.diffs[rowId], true, width))
         }
       }
     }
@@ -505,7 +615,8 @@ const rowLine = (
   if (row.kind === 'gap') return [{ t: ' ' }]
   const layout = st.settings.layout
   const ic = icons(st.settings.nerdFont)
-  const bg = isCursor ? SEL : undefined
+  const tint = row.kind === 'diff' && row.tone !== undefined && row.tone !== 'note' ? TINT[row.tone][isCursor ? 1 : 0] : undefined
+  const bg = tint ?? (isCursor ? SEL : undefined)
   const spin = SPINNER[st.frame % SPINNER.length]!
   const act = `row:${index}`
   const body = width - 1
@@ -564,7 +675,13 @@ const rowLine = (
       layout === 'powerline'
         ? { t: ` ${file.st} `, fg: color, inv: true, bold: true }
         : { t: file.st, fg: color, bold: true }
-    left = [{ t: '  ' }, stat, { t: ' ' }, { t: name }, ...(dir ? [{ t: ` ${dir}`, fg: DIM }] : [])]
+    left = [
+      row.foldable ? { t: row.open ? '▾ ' : '▸ ', fg: DIM } : { t: '  ' },
+      stat,
+      { t: ' ' },
+      { t: name },
+      ...(dir ? [{ t: ` ${dir}`, fg: DIM }] : []),
+    ]
     if (file.count !== null) {
       right = [{ t: `${file.count} files`, fg: DIM }]
     } else if (file.add !== null || file.del !== null) {
@@ -587,7 +704,24 @@ const rowLine = (
     }
   } else if (row.kind === 'commit') {
     gutter = 'yellow'
-    left = [{ t: '  ' }, { t: row.sha ?? '', fg: 'yellow' }, { t: ' ' }, { t: row.text ?? '' }]
+    left = [
+      { t: row.open ? '▾ ' : '▸ ', fg: DIM },
+      { t: row.sha ?? '', fg: 'yellow' },
+      { t: ' ' },
+      { t: row.text ?? '' },
+    ]
+  } else if (row.kind === 'diff') {
+    gutter = tint ?? SURFACE
+    if (tint === undefined) {
+      left = [{ t: '    ' }, { t: row.text ?? '', fg: DIM }]
+    } else {
+      const w = row.numW ?? 2
+      const num = (n?: number) => (n === undefined ? ' '.repeat(w) : String(n).padStart(w))
+      left = [
+        { t: `  ${num(row.oldNo)} ${num(row.newNo)} ${row.mark || ' '}│ `, fg: DIM },
+        { t: row.text ?? '', fg: row.tone === 'hunk' ? DIM : undefined, bold: row.tone === 'file' },
+      ]
+    }
   }
 
   const marker: Seg =
@@ -595,7 +729,7 @@ const rowLine = (
       ? { t: '▎', fg: isCursor ? 'blue' : gutter, bg }
       : isCursor
         ? { t: '▌', fg: 'blue', bg }
-        : { t: ' ' }
+        : { t: ' ', bg }
   const line = lr(withBg(left, bg), withBg(right, bg), body - 1, bg)
 
   return [{ ...marker, act }, ...line.map(seg => ({ ...seg, act: seg.act ?? act })), { t: ' ', bg, act }]
@@ -672,6 +806,7 @@ const toggle = (surface: ClientSurface<State>, st: State, rows: Row[], index: nu
   const target = row.foldable ? row : rows.find(one => one.id === row.parent)
   if (!target) return
   const at = rows.indexOf(target)
+  if (target.kind === 'file' || target.kind === 'commit') surface.post({ type: 'diff', key: target.id, open: !target.open })
   surface.setState({
     ...st,
     fold: { ...st.fold, [target.id]: !target.open },
@@ -683,7 +818,8 @@ const toggle = (surface: ClientSurface<State>, st: State, rows: Row[], index: nu
 const setOpen = (surface: ClientSurface<State>, st: State, rows: Row[], index: number, open: boolean) => {
   const row = rows[index]
   if (!row) return
-  const target = row.foldable ? row : rows.find(one => one.id === row.parent)
+  const closedLeaf = row.foldable && row.parent !== undefined && !open && !row.open
+  const target = row.foldable && !closedLeaf ? row : rows.find(one => one.id === row.parent)
   if (!target || target.open === open) {
     if (!row.foldable && target) move(surface, st, rows, rows.indexOf(target))
 
@@ -794,8 +930,9 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   const width = surface.columns > 0 ? surface.columns : props.columns
   const height = surface.rows > 0 ? Math.min(surface.rows, props.rows) : props.rows
   const first = surface.state === undefined
-  const st = surface.state ?? initial(props)
+  let st = surface.state ?? initial(props)
   if (first) {
+    wheelSeen = props.wheel
     surface.setState(st)
     surface.every(100, () => tick(surface))
   }
@@ -807,8 +944,23 @@ const Panel: ClientModule<PanelProps, State> = (props, surface) => {
   const foot = footer(st, width, hasRunning)
   listHeight = Math.max(1, height - head.length - foot.length)
   const rows = buildRows(props, st, width)
-  const cursor = Math.max(0, Math.min(rows.length - 1, st.cursor))
-  const top = Math.max(0, Math.min(scrollTo(cursor, st.top, listHeight), Math.max(0, rows.length - listHeight)))
+  const reach = (from: State) => {
+    const at = Math.max(0, Math.min(rows.length - 1, from.cursor))
+
+    return { at, from: Math.max(0, Math.min(scrollTo(at, from.top, listHeight), Math.max(0, rows.length - listHeight))) }
+  }
+  const pulled = props.wheel - wheelSeen
+  wheelSeen = props.wheel
+  if (pulled !== 0 && !st.settingsOpen && !first) {
+    const base = reach(st)
+    const next = Math.max(0, Math.min(base.from + pulled, Math.max(0, rows.length - listHeight)))
+    const last = Math.min(rows.length - 1, next + listHeight - 1)
+    let moved = Math.max(next, Math.min(base.at, last))
+    if (rows[moved]?.kind === 'gap') moved = moved < last ? moved + 1 : moved - 1
+    st = { ...st, top: next, cursor: moved }
+    surface.setState(st)
+  }
+  const { at: cursor, from: top } = reach(st)
 
   const list: Line[] = []
   if (rows.length === 0) {

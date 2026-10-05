@@ -5,7 +5,18 @@ A Claude Code mod (plugin id `cc-reviewer`): a side pane with two tabs.
 ![The cc-reviewer pane beside a Claude Code session, showing the Plan tab](docs/screenshot.png)
 
 - **Plan** shows the plan markdown of your session as collapsible sections, with task progress and the running task's elapsed time.
-- **Changes** shows git changes grouped as Commits (ahead of upstream), Staged, Unstaged and Untracked, with `+/−` stats.
+- **Changes** shows git changes grouped as Commits, Staged, Unstaged and Untracked, with `+/−` stats. Commits are the ones on this branch since the default branch, pushed or not. On the default branch, or when no default branch is found, they are the commits ahead of upstream.
+
+  Expand a commit or a file to read its diff right under the row, laid out like a GitLab inline diff:
+
+  - old and new line numbers, a `+`/`-` marker, and a full-width tint (green for added, red for removed, blue for context lines) with dim hunk headers;
+  - one header row per file in a commit diff;
+  - long lines wrap onto continuation rows, and a diff stops after 200 source lines with a note counting the rest;
+  - the mouse wheel and the keyboard both scroll it.
+
+  The tints are truecolor (`#rrggbb`) values.
+
+![The Changes tab with a diff expanded under a file, beside a Claude Code session](docs/changes.png)
 
 Three layouts (**Outline**, **Powerline**, **Focus**) and an optional Nerd Font icon set are chosen in the settings menu. The choice is saved between sessions. Colors use ANSI slots, so the pane follows your terminal theme.
 
@@ -88,15 +99,15 @@ Click the pane to give it keyboard focus. Escape hands the focus back to the pro
 | --- | --- |
 | `j` / `↓`, `k` / `↑` | Move the cursor |
 | `g` / `G` | Top / bottom |
-| `Enter` / `Space` | Fold or unfold the current section or group (on a child row, its parent) |
+| `Enter` / `Space` | Fold or unfold the current section or group, or expand or collapse the diff of a commit or file (on a child row, its parent) |
 | `h` / `←`, `l` / `→` | Collapse / expand |
 | `Tab`, `1`, `2` | Switch tab |
 | `s` or `,` | Open settings (`s`, `,` or `q` closes it) |
 | `q` | Close the pane |
 
-Tabs, rows and the gear icon also respond to a mouse click.
+Tabs, rows and the gear icon also respond to a mouse click, and the mouse wheel scrolls the list (not while the settings menu is open).
 
-The pane re-reads the plan file and `git` every few seconds and after every Read, Write, Edit and Bash call.
+The pane re-reads the plan file and `git` every few seconds and after every Read, Write, Edit and Bash call. Diffs are fetched only when you expand a row, and the refresh then re-runs git for the open diffs alone. Folders in the Untracked group have no diff.
 
 ## Develop
 
