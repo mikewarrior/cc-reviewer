@@ -217,7 +217,8 @@ test('says so when there is no plan or no git repository', async ($, on) => {
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan file/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found in odd\/tasks/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
   await ui.key({ ...IN, key: '2' })
   expect(await ui.find({ ...IN, text: /Not a git repository/ })).toBeDefined()
 })
@@ -315,6 +316,8 @@ test("Claude's default folder shows only the session plan, never the newest", as
   const ui = await mountPane($)
 
   expect(await ui.find({ ...IN, text: /Other project/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /No plan for this session/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
 
   await ui.unmount()
   await bindPlan($, '/home/me/.claude/plans/mine.md')
