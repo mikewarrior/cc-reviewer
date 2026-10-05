@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
 
 import type {
+  Diff,
   Git,
   GitFile,
   Layout,
@@ -20,6 +21,9 @@ const REFRESH_MS = 4000
 const BODY_LINES = 40
 const BRANCH_PLANS = 'branchPlans'
 const DEFAULT_BRANCHES = ['main', 'master']
+const DIFF_LINES = 200
+const GIT = ['git', '--no-optional-locks']
+const SHA = /^[0-9a-f]{4,40}$/i
 
 const plan = atom({ plugin: 'cc-reviewer', key: 'plan' } as const, null)
 const git = atom({ plugin: 'cc-reviewer', key: 'git' } as const, null)
@@ -30,6 +34,7 @@ const settings = atom({ plugin: 'cc-reviewer', key: 'settings' } as const, {
 const search = atom({ plugin: 'cc-reviewer', key: 'search' } as const, null)
 const active = atom({ plugin: 'cc-reviewer', key: 'active' } as const, null)
 const bound = atom({ plugin: 'cc-reviewer', key: 'bound' } as const, null)
+const diffs = atom({ plugin: 'cc-reviewer', key: 'diffs' } as const, {})
 const runningSince = atom({ plugin: 'cc-reviewer', key: 'runningSince' } as const, null)
 
 type Dollar = Parameters<Hook<'session.start'>>[0]
@@ -256,11 +261,40 @@ const parseGit = (
   return result
 }
 
-async function run($: Dollar, argv: string[]) {
+const toDiff = (text: string): Diff => {
+  const lines = text === '' ? [] : text.replace(/\r?\n$/, '').split('\n')
+
+  return { lines: lines.slice(0, DIFF_LINES), more: Math.max(0, lines.length - DIFF_LINES) }
+}
+
+const diffCommand = (key: string) => {
+  const file = /^f:(staged|unstaged|untracked):(.+)$/s.exec(key)
+  if (file) {
+    const path = file[2]!
+    if (file[1] === 'staged') return { argv: [...GIT, 'diff', '--cached', '--no-color', '--', path], ok: [0] }
+    if (file[1] === 'unstaged') return { argv: [...GIT, 'diff', '--no-color', '--', path], ok: [0] }
+    if (path.endsWith('/')) return null
+
+    return { argv: [...GIT, 'diff', '--no-index', '--no-color', '--', '/dev/null', path], ok: [0, 1] }
+  }
+  const commit = /^c:(.+)$/s.exec(key)
+  if (commit && SHA.test(commit[1]!)) return { argv: [...GIT, 'show', '--no-color', '--format=', commit[1]!], ok: [0] }
+
+  return null
+}
+
+const diffShown = (key: string, value: Git) => {
+  const file = /^f:(staged|unstaged|untracked):(.+)$/s.exec(key)
+  if (file) return value[file[1] as 'staged' | 'unstaged' | 'untracked'].some(one => one.path === file[2])
+
+  return value.commits.some(one => `c:${one.sha}` === key)
+}
+
+async function run($: Dollar, argv: string[], ok: number[] = [0]) {
   try {
     const ran = await $.process.run(argv)
 
-    return ran.exitCode === 0 ? ran.stdout : null
+    return ok.includes(ran.exitCode) ? ran.stdout : null
   } catch {
     return null
   }
@@ -274,6 +308,43 @@ async function setPlan($: Dollar, value: Plan | null) {
 async function setGit($: Dollar, value: Git | null) {
   const before = await read($, git)
   if (JSON.stringify(before) !== JSON.stringify(value)) await update($, git, () => value)
+}
+
+async function fetchDiff($: Dollar, key: string) {
+  const command = diffCommand(key)
+  if (command === null) return null
+
+  return toDiff((await run($, command.argv, command.ok)) ?? '')
+}
+
+async function openDiff($: Dollar, key: string) {
+  const fetched = await fetchDiff($, key)
+  if (fetched !== null) await update($, diffs, before => ({ ...before, [key]: fetched }))
+}
+
+async function closeDiff($: Dollar, key: string) {
+  await update($, diffs, before => {
+    if (!(key in before)) return before
+    const { [key]: _closed, ...rest } = before
+
+    return rest
+  })
+}
+
+async function refreshDiffs($: Dollar, value: Git) {
+  const before = await read($, diffs)
+  const keys = Object.keys(before).filter(key => diffShown(key, value))
+  if (keys.length === 0) return
+  const fetched = await Promise.all(keys.map(async key => [key, await fetchDiff($, key)] as const))
+  const next = { ...before }
+  for (const [key, text] of fetched) if (text !== null) next[key] = text
+  if (JSON.stringify(next) === JSON.stringify(before)) return
+  await update($, diffs, current => {
+    const merged = { ...current }
+    for (const key of Object.keys(next)) if (key in current) merged[key] = next[key]!
+
+    return merged
+  })
 }
 
 async function repoDir($: Dollar) {
@@ -417,7 +488,9 @@ async function refresh($: Dollar, globalDir: string) {
     run($, ['git', '--no-optional-locks', 'log', '@{u}..HEAD', '--format=%h%x09%s', '-n', '20']),
     run($, ['git', '--no-optional-locks', 'ls-files', '--others', '--exclude-standard']),
   ])
-  await setGit($, parseGit(status, worktree ?? '', cached ?? '', log ?? '', others ?? ''))
+  const parsed = parseGit(status, worktree ?? '', cached ?? '', log ?? '', others ?? '')
+  await setGit($, parsed)
+  await refreshDiffs($, parsed)
 }
 
 async function bind($: Dollar, path: string, globalDir: string) {
@@ -515,11 +588,14 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.message', async ($, e, next) => {
-    const data = e.data as { type?: string; layout?: Layout; nerdFont?: boolean } | null
+    const data = e.data as { type?: string; layout?: Layout; nerdFont?: boolean; key?: string; open?: boolean } | null
     if (data?.type === 'settings' && data.layout && LAYOUTS.includes(data.layout)) {
       const chosen: Settings = { layout: data.layout, nerdFont: data.nerdFont === true }
       await $.store.set('settings', chosen)
       await update($, settings, () => chosen)
+    } else if (data?.type === 'diff' && typeof data.key === 'string') {
+      if (data.open === true) await openDiff($, data.key)
+      else await closeDiff($, data.key)
     } else if (data?.type === 'close') {
       await $.ui.close({ id: PANE })
     }
@@ -536,6 +612,7 @@ export const register: Register = (on, options) => {
       plan: await read($, plan),
       search: await read($, search),
       git: await read($, git),
+      diffs: await read($, diffs),
       runningSince: await read($, runningSince),
     }
 

@@ -34,6 +34,8 @@ export type Git = {
   del: number
 }
 
+export type Diff = { lines: string[]; more: number }
+
 export type PanelProps = {
   columns: number
   rows: number
@@ -41,6 +43,7 @@ export type PanelProps = {
   plan: Plan | null
   search: PlanSearch | null
   git: Git | null
+  diffs: Record<string, Diff>
   runningSince: number | null
 }
 
@@ -50,6 +53,7 @@ declare module 'claude-code' {
       plan: Plan | null
       search: PlanSearch | null
       git: Git | null
+      diffs: Record<string, Diff>
       settings: Settings
       active: string | null
       bound: string | null

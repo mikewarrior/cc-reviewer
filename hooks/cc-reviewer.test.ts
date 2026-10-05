@@ -47,6 +47,8 @@ type Options = {
   env?: Record<string, string>
   branch?: string | null
   store?: Record<string, unknown>
+  diffs?: Record<string, string | { exitCode: number; stdout: string }>
+  onRun?: (argv: string) => void
 }
 
 const REPO_FILE = '.claude/cc-reviewer.json'
@@ -66,6 +68,8 @@ const stubEngine = (
     env = {},
     branch = 'feat/proj-1-example',
     store = {},
+    diffs = {},
+    onRun,
   }: Options = {},
 ) => {
   on('session.start', () => ({ cwd: '/work' }))
@@ -102,6 +106,13 @@ const stubEngine = (
   on('process.run', (_$, e) => {
     if (!git) throw new Error('not a repo')
     const argv = e.argv.join(' ')
+    onRun?.(e.argv.slice(2).join(' '))
+    const diff = diffs[e.argv.slice(2).join(' ')]
+    if (diff !== undefined) {
+      const { exitCode, stdout } = typeof diff === 'string' ? { exitCode: 0, stdout: diff } : diff
+
+      return { value: { exitCode, stdout, stderr: '' } }
+    }
     if (argv.includes('--show-current')) {
       if (branch === null) return { value: { exitCode: 128, stdout: '', stderr: 'fatal' } }
 
@@ -508,4 +519,96 @@ test('a bound plan is remembered for the branch when it sits in the searched fol
   await bindPlan($, `${TASKS}/bar.md`)
 
   expect(saved.branchPlans).toEqual({ '/work\nfeat/baz': `${TASKS}/bar.md` })
+})
+
+const DIFF_STAGED = 'diff --cached --no-color -- staged.ts'
+const DIFF_UNSTAGED = 'diff --no-color -- src/unstaged.ts'
+const DIFF_UNTRACKED = 'diff --no-index --no-color -- /dev/null new.ts'
+const SHOW_COMMIT = 'show --no-color --format= abc1234'
+
+const fetches = (runs: string[]) => runs.filter(run => run.includes('--no-color'))
+
+const bash = ($: Dollar) => $.tool.call({ tool: 'Bash', command: 'true' })
+
+for (const [key, argv] of [
+  ['f:staged:staged.ts', DIFF_STAGED],
+  ['f:unstaged:src/unstaged.ts', DIFF_UNSTAGED],
+  ['f:untracked:new.ts', DIFF_UNTRACKED],
+  ['c:abc1234', SHOW_COMMIT],
+] as const) {
+  test(`opening ${key} asks git for ${argv}`, async ($, on) => {
+    const runs: string[] = []
+    stubEngine(on, { onRun: run => runs.push(run) })
+    await $.session.start({ cwd: '/work' })
+    const ui = await mountPane($)
+    runs.length = 0
+
+    await ui.post({ type: 'diff', key, open: true })
+
+    expect([...new Set(fetches(runs))]).toEqual([argv])
+  })
+}
+
+for (const key of ['c:--output=/tmp/x', 'c:', 'f:untracked:build/', 'f:other:staged.ts', 'nonsense']) {
+  test(`a diff request for ${JSON.stringify(key)} runs no git`, async ($, on) => {
+    const runs: string[] = []
+    stubEngine(on, { onRun: run => runs.push(run) })
+    await $.session.start({ cwd: '/work' })
+    const ui = await mountPane($)
+    runs.length = 0
+
+    await ui.post({ type: 'diff', key, open: true })
+
+    expect(fetches(runs)).toEqual([])
+  })
+}
+
+test('the refresh costs nothing extra while no diff is open', async ($, on) => {
+  const runs: string[] = []
+  stubEngine(on, { onRun: run => runs.push(run) })
+  await $.session.start({ cwd: '/work' })
+  await mountPane($)
+  runs.length = 0
+
+  await bash($)
+
+  expect(runs.length).toBeGreaterThan(0)
+  expect(fetches(runs)).toEqual([])
+})
+
+test('the refresh re-runs git for the open diffs only and stops after a close', async ($, on) => {
+  const runs: string[] = []
+  stubEngine(on, { onRun: run => runs.push(run) })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+  await ui.post({ type: 'diff', key: 'f:staged:staged.ts', open: true })
+  await ui.post({ type: 'diff', key: 'c:abc1234', open: true })
+  runs.length = 0
+
+  await bash($)
+  expect(fetches(runs).sort()).toEqual([DIFF_STAGED, SHOW_COMMIT].sort())
+
+  await ui.post({ type: 'diff', key: 'c:abc1234', open: false })
+  runs.length = 0
+  await bash($)
+  expect(fetches(runs)).toEqual([DIFF_STAGED])
+
+  await ui.post({ type: 'diff', key: 'f:staged:staged.ts', open: false })
+  runs.length = 0
+  await bash($)
+  expect(fetches(runs)).toEqual([])
+})
+
+test('the refresh skips an open diff whose file or commit is gone from git', async ($, on) => {
+  const runs: string[] = []
+  stubEngine(on, { onRun: run => runs.push(run) })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+  await ui.post({ type: 'diff', key: 'f:staged:gone.ts', open: true })
+  await ui.post({ type: 'diff', key: 'c:deadbee', open: true })
+  runs.length = 0
+
+  await bash($)
+
+  expect(fetches(runs)).toEqual([])
 })
