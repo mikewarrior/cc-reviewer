@@ -26,7 +26,7 @@ type State = {
 }
 type Row = {
   id: string
-  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit'
+  kind: 'section' | 'body' | 'task' | 'group' | 'file' | 'commit' | 'gap'
   parent?: string
   open?: boolean
   foldable?: boolean
@@ -203,6 +203,7 @@ const buildRows = (props: PanelProps, st: State, width: number): Row[] => {
       const isTasks = section.tasks !== null
       const open = st.fold[id] ?? isTasks
       const tasks = section.tasks ?? []
+      if (rows.length > 0) rows.push({ id: `gap:${id}`, kind: 'gap' })
       rows.push({
         id,
         kind: 'section',
@@ -347,6 +348,8 @@ const header = (props: PanelProps, st: State, width: number): Line[] => {
     )
   }
 
+  out.push([{ t: ' ' }])
+
   const branchSeg: Seg = { t: `${ic.branch} ${branch}`, fg: layout === 'focus' && st.tab === 'changes' ? 'blue' : DIM }
   const titleLines = wrap(props.plan?.title ?? 'No plan found', Math.max(8, width - 6)).slice(0, 2)
   const topRow: Line =
@@ -375,7 +378,7 @@ const header = (props: PanelProps, st: State, width: number): Line[] => {
       if (layout === 'focus' && git.tracking) stats.push({ t: ` vs ${git.tracking}`, fg: DIM })
     }
     boxed.push(stats)
-    out.push(...boxLines(boxed, width))
+    out.push(...boxLines(boxed, width), [{ t: ' ' }])
 
     return out
   }
@@ -435,7 +438,7 @@ const header = (props: PanelProps, st: State, width: number): Line[] => {
       { t: `${pct}%` },
     ])
   }
-  out.push(...boxLines(boxed, width))
+  out.push(...boxLines(boxed, width), [{ t: ' ' }])
 
   return out
 }
@@ -482,6 +485,7 @@ const rowLine = (
   width: number,
   isCursor: boolean,
 ): Line => {
+  if (row.kind === 'gap') return [{ t: ' ' }]
   const layout = st.settings.layout
   const ic = icons(st.settings.nerdFont)
   const bg = isCursor ? SEL : undefined
@@ -639,7 +643,9 @@ const scrollTo = (cursor: number, top: number, height: number) =>
 const cursorRows = (props: PanelProps, st: State, width: number) => buildRows(props, st, width)
 
 const move = (surface: ClientSurface<State>, st: State, rows: Row[], to: number) => {
-  const cursor = Math.max(0, Math.min(rows.length - 1, to))
+  let cursor = Math.max(0, Math.min(rows.length - 1, to))
+  // A gap is only spacing and always sits between two sections, so one step in the direction of travel clears it.
+  if (rows[cursor]?.kind === 'gap') cursor += to >= st.cursor ? 1 : -1
   surface.setState({ ...st, cursor, top: scrollTo(cursor, st.top, listHeight) })
 }
 
