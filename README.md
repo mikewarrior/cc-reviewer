@@ -2,6 +2,8 @@
 
 A Claude Code mod (plugin id `cc-reviewer`): a side pane with two tabs.
 
+![The cc-reviewer pane beside a Claude Code session, showing the Plan tab](docs/screenshot.png)
+
 - **Plan** shows the plan markdown of your session as collapsible sections, with task progress and the running task's elapsed time.
 - **Changes** shows git changes grouped as Commits (ahead of upstream), Staged, Unstaged and Untracked, with `+/−` stats.
 
