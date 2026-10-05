@@ -1,226 +1,177 @@
 import { expect, test } from 'claude-code/testing'
 
-const NEW = [
-  '# PROJ-1 - Example feature',
+const PLAN = [
+  '# PROJ-1 — Example feature',
   '',
   '## Objective',
   '',
   'Replace the hand-written payloads with a generated client.',
   '',
-  '## Acceptance criteria',
-  '',
-  '- [ ] criterion one',
-  '- [x] criterion two',
-  '',
   '## Tasks',
   '',
-  '- [x] T1: Added `thing`. More detail',
+  '- [x] T1: Added `thing`',
   '      continuation line',
   '- [ ] T2: Wire the client',
-  '- [ ] Plain task without an id',
+  '- [ ] T3: Write the docs',
   '',
   '## Notes',
-  '',
-  'Remember the fence below.',
   '',
   '```',
   '## not a heading',
   '```',
 ].join('\n')
 
-const OLD = '## Tasks\n\n- [x] T1: Old feature task\n'
-
-const PROPS = {
-  title: 'ODD tasks',
-  isFocused: true,
-  bodyColumns: 60,
-  placement: 'dock',
-} as const
-
 const STATUS = [
   '## t/feature...origin/t/feature [ahead 2, behind 1]',
   'M  staged.ts',
-  'A  added.ts',
-  ' M unstaged.ts',
-  'MM both.ts',
+  ' M src/unstaged.ts',
   'R  old.ts -> renamed.ts',
   '?? new.ts',
+  '?? build/',
   '',
 ].join('\n')
 
-const stubEngine = (
-  on: Parameters<Parameters<typeof test>[1]>[1],
-  isMissing = false,
-  status: string | null = STATUS,
-) => {
-  on('process.run', () => {
-    if (status === null) throw new Error('not a repo')
+type On = Parameters<Parameters<typeof test>[1]>[1]
+type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 
-    return { value: { exitCode: 0, stdout: status, stderr: '' } }
-  })
+type Options = { git?: boolean; plan?: boolean; onSave?: (key: string, value: unknown) => void }
+
+const stubEngine = (on: On, { git = true, plan = true, onSave }: Options = {}) => {
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', (_$, e) => {
+    onSave?.(e.key, e.value)
+
+    return { value: undefined }
+  })
+  on('clock.every', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: 1_000_000 }))
   on('fs.list', () => {
-    if (isMissing) throw new Error('ENOENT')
+    if (!plan) throw new Error('ENOENT')
 
     return {
-    value: [
-      { name: 'new.md', kind: 'file', size: 1, mtimeMs: 2, isLink: false },
-      { name: 'old.md', kind: 'file', size: 1, mtimeMs: 1, isLink: false },
-      { name: 'notes.txt', kind: 'file', size: 1, mtimeMs: 3, isLink: false },
-    ],
+      value: [{ name: 'proj-1-example.md', kind: 'file', size: 1, mtimeMs: 2, isLink: false }],
     }
   })
-  on('fs.read', (_$, e) => ({ value: e.path.endsWith('old.md') ? OLD : NEW }))
+  on('fs.read', () => ({ value: PLAN }))
+  on('process.run', (_$, e) => {
+    if (!git) throw new Error('not a repo')
+    const argv = e.argv.join(' ')
+    const out = argv.includes('status')
+      ? STATUS
+      : argv.includes('--cached')
+        ? '3\t1\tstaged.ts\n'
+        : argv.includes('--numstat')
+          ? '10\t2\tsrc/unstaged.ts\n'
+          : argv.includes('log')
+            ? 'abc1234\tAdd the thing\n'
+            : argv.includes('ls-files')
+              ? 'new.ts\nbuild/a.js\nbuild/b.js\n'
+              : ''
+
+    return { value: { exitCode: 0, stdout: out, stderr: '' } }
+  })
 }
 
-const mountPane = ($: Parameters<Parameters<typeof test>[1]>[0]) =>
+const mountPane = ($: Dollar) =>
   $.ui.mount({
     plugin: 'odd-tasks',
     surface: 'terminal',
     component: 'Pane',
-    props: PROPS,
+    props: { title: 'ODD', isFocused: true, bodyColumns: 60, placement: 'dock' },
     requestId: 'odd-tasks',
+    viewport: { columns: 60, rows: 30 },
   })
 
-test('lists every section of the newest plan, with Tasks open', async ($, on) => {
+const IN = { in: 'panel' } as const
+
+test('Plan tab: header, progress and sections with Tasks open', async ($, on) => {
   stubEngine(on)
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ text: /PROJ-1 - Example feature/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-0', text: /▸ Objective/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-1', text: /▸ Acceptance criteria/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-2', text: /▾ Tasks/ })).toBeDefined()
-  expect(await ui.find({ key: 'section-3', text: /▸ Notes/ })).toBeDefined()
-  expect(await ui.find({ text: /^ 1\/3$/ })).toBeDefined()
-  expect(await ui.find({ text: /^ 1\/2$/ })).toBeDefined()
-  expect(await ui.find({ key: 'task-T1', text: /T1 Added thing/ })).toBeDefined()
-  expect(await ui.find({ key: 'task-T2', text: /T2 Wire the client/ })).toBeDefined()
-  expect(await ui.find({ key: 'task-#3', text: /Plain task without an id/ })).toBeDefined()
-  expect(await ui.find({ text: /Replace the hand-written/ })).toBeUndefined()
-  expect(await ui.find({ text: /Old feature/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /PROJ-1/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Example feature/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /odd\/tasks\/proj-1-example\.md/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▸ Objective/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▾ Tasks/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /T1/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Wire the client/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Replace the hand-written/ })).toBeUndefined()
+  expect(await ui.find({ ...IN, text: /not a heading/ })).toBeUndefined()
 })
 
-test('a section expands to its markdown and collapses again', async ($, on) => {
+test('j/k move the cursor and Enter folds and unfolds a section', async ($, on) => {
   stubEngine(on)
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  await ui.press({ key: 'section-0' })
-  expect(await ui.find({ key: 'section-0', text: /▾ Objective/ })).toBeDefined()
-  expect(await ui.find({ text: /Replace the hand-written/ })).toBeDefined()
-  await ui.press({ key: 'section-0' })
-  expect(await ui.find({ text: /Replace the hand-written/ })).toBeUndefined()
+  await ui.key({ ...IN, key: 'return' })
+  expect(await ui.find({ ...IN, text: /Replace the hand-written/ })).toBeDefined()
+  await ui.key({ ...IN, key: 'return' })
+  expect(await ui.find({ ...IN, text: /Replace the hand-written/ })).toBeUndefined()
+
+  await ui.key({ ...IN, key: 'j' })
+  await ui.key({ ...IN, key: 'return' })
+  expect(await ui.find({ ...IN, text: /Wire the client/ })).toBeUndefined()
+  await ui.key({ ...IN, key: 'l' })
+  expect(await ui.find({ ...IN, text: /Wire the client/ })).toBeDefined()
 })
 
-test('keeps a heading inside a code fence in its section', async ($, on) => {
+test('Tab and 2 switch to Changes with grouped files and stats', async ($, on) => {
   stubEngine(on)
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ key: 'section-4' })).toBeUndefined()
-  await ui.press({ key: 'section-3' })
-  expect(await ui.find({ text: /not a heading/ })).toBeDefined()
+  await ui.key({ ...IN, key: '2' })
+  expect(await ui.find({ ...IN, text: /Changes 5/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▾ Commits/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Add the thing/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▾ Staged/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▾ Unstaged/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /▾ Untracked/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /\+10/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /\+13 −3/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /renamed\.ts/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /2 files/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /old\.ts/ })).toBeUndefined()
+
+  await ui.key({ ...IN, key: 'tab' })
+  expect(await ui.find({ ...IN, text: /▾ Tasks/ })).toBeDefined()
 })
 
-test('a task expands to its detail and collapses again', async ($, on) => {
-  stubEngine(on)
+test('settings menu switches layout and persists it', async ($, on) => {
+  let saved: unknown
+  stubEngine(on, { onSave: (key, value) => {
+      if (key === 'settings') saved = value
+    }, })
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ text: /continuation line/ })).toBeUndefined()
-  await ui.press({ key: 'task-T1' })
-  expect(await ui.find({ text: /continuation line/ })).toBeDefined()
-  await ui.press({ key: 'task-T1' })
-  expect(await ui.find({ text: /continuation line/ })).toBeUndefined()
+  await ui.key({ ...IN, key: 's' })
+  expect(await ui.find({ ...IN, text: /Settings/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Powerline/ })).toBeDefined()
+  await ui.key({ ...IN, key: 'j' })
+  await ui.key({ ...IN, key: 'return' })
+  expect(await ui.find({ ...IN, text: /PLAN/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /LIVE/ })).toBeDefined()
+  await ui.key({ ...IN, key: 'j' })
+  await ui.key({ ...IN, key: 'return' })
+  expect(saved).toMatchObject({ layout: 'focus' })
+  await ui.key({ ...IN, key: 's' })
+  expect(await ui.find({ ...IN, text: /NOW/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /next/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Settings/ })).toBeUndefined()
 })
 
-test('the Tasks header collapses and expands its list', async ($, on) => {
-  stubEngine(on)
+test('says so when there is no plan or no git repository', async ($, on) => {
+  stubEngine(on, { git: false, plan: false })
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  await ui.press({ key: 'section-2' })
-  expect(await ui.find({ key: 'section-2', text: /▸ Tasks/ })).toBeDefined()
-  expect(await ui.find({ key: 'task-T2' })).toBeUndefined()
-  await ui.press({ key: 'section-2' })
-  expect(await ui.find({ key: 'task-T2' })).toBeDefined()
-})
-
-test('follows the task file this session reads', async ($, on) => {
-  stubEngine(on)
-  on('tool.call', { tool: 'Read' }, () => ({ result: '' as never }))
-  await $.session.start({ cwd: '/work' })
-  await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/old.md' })
-  const ui = await mountPane($)
-
-  expect(await ui.find({ text: /old/ })).toBeDefined()
-  expect(await ui.find({ text: /Old feature task/ })).toBeDefined()
-  expect(await ui.find({ key: 'task-T2' })).toBeUndefined()
-})
-
-test('says so when odd/tasks is missing', async ($, on) => {
-  stubEngine(on, true)
-  await $.session.start({ cwd: '/work' })
-  const ui = await mountPane($)
-
-  expect(await ui.find({ text: /No task file/ })).toBeDefined()
-})
-
-test('opens on the Plan tab and switches to Changes with git status', async ($, on) => {
-  stubEngine(on)
-  await $.session.start({ cwd: '/work' })
-  const ui = await mountPane($)
-
-  expect(await ui.find({ key: 'tab-plan', text: /Plan/ })).toBeDefined()
-  expect(await ui.find({ key: 'tab-changes', text: /Changes 6/ })).toBeDefined()
-  expect(await ui.find({ text: /^t\/feature$/ })).toBeUndefined()
-
-  await ui.press({ key: 'tab-changes' })
-  expect(await ui.find({ text: /^t\/feature$/ })).toBeDefined()
-  expect(await ui.find({ text: /↑2/ })).toBeDefined()
-  expect(await ui.find({ text: /↓1/ })).toBeDefined()
-  expect(await ui.find({ text: /origin\/t\/feature/ })).toBeDefined()
-  expect(await ui.find({ key: 'git-staged', text: /▾ Staged/ })).toBeDefined()
-  expect(await ui.find({ key: 'git-unstaged', text: /▾ Unstaged/ })).toBeDefined()
-  expect(await ui.find({ key: 'git-untracked', text: /▾ Untracked/ })).toBeDefined()
-  expect(await ui.find({ text: /staged\.ts/ })).toBeDefined()
-  expect(await ui.find({ text: /renamed\.ts/ })).toBeDefined()
-  expect(await ui.find({ text: /old\.ts/ })).toBeUndefined()
-  expect(await ui.find({ key: 'section-0' })).toBeUndefined()
-
-  await ui.press({ key: 'tab-plan' })
-  expect(await ui.find({ key: 'section-0' })).toBeDefined()
-})
-
-test('a git group collapses', async ($, on) => {
-  stubEngine(on)
-  await $.session.start({ cwd: '/work' })
-  const ui = await mountPane($)
-
-  await ui.press({ key: 'tab-changes' })
-  expect(await ui.find({ text: /new\.ts/ })).toBeDefined()
-  await ui.press({ key: 'git-untracked' })
-  expect(await ui.find({ key: 'git-untracked', text: /▸ Untracked/ })).toBeDefined()
-  expect(await ui.find({ text: /new\.ts/ })).toBeUndefined()
-})
-
-test('says the tree is clean when nothing changed', async ($, on) => {
-  stubEngine(on, false, '## main...origin/main\n')
-  await $.session.start({ cwd: '/work' })
-  const ui = await mountPane($)
-
-  await ui.press({ key: 'tab-changes' })
-  expect(await ui.find({ text: /working tree clean/ })).toBeDefined()
-})
-
-test('says so when the folder is not a git repository', async ($, on) => {
-  stubEngine(on, false, null)
-  await $.session.start({ cwd: '/work' })
-  const ui = await mountPane($)
-
-  await ui.press({ key: 'tab-changes' })
-  expect(await ui.find({ text: /Not a git repository/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan file/ })).toBeDefined()
+  await ui.key({ ...IN, key: '2' })
+  expect(await ui.find({ ...IN, text: /Not a git repository/ })).toBeDefined()
 })

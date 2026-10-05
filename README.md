@@ -1,9 +1,11 @@
 # cc-reviewer
 
-A Claude Code mod (plugin id `odd-tasks`): a side pane for Claude Code with two tabs:
+A Claude Code mod (plugin id `odd-tasks`): a side pane with two tabs.
 
-- **Plan** shows the plan markdown for the feature you are working on, one collapsible section per `##` heading. Checkbox sections show a `done/total` count, and each task in the `Tasks` section expands to its full text.
-- **Changes** shows the current `git status`: branch, ahead/behind, and staged, unstaged and untracked files, with colored status letters.
+- **Plan** shows the plan markdown for the feature you are working on as collapsible sections, with task progress and the running task's elapsed time.
+- **Changes** shows git changes grouped as Commits (ahead of upstream), Staged, Unstaged and Untracked, with `+/−` stats.
+
+Three layouts (**Outline**, **Powerline**, **Focus**) and an optional Nerd Font icon set are chosen in the settings menu. The choice is saved between sessions. Colors use ANSI slots, so the pane follows your terminal theme.
 
 ## Plan file format
 
@@ -26,6 +28,7 @@ What and why.
 - The first `# ` line is the title and every `## ` section becomes a collapsible block.
 - Only the `## Tasks` section gets task rows. Other sections are drawn as rendered Markdown.
 - The pane shows the file this session last read, wrote or edited. Until then it shows the newest file by modified time.
+- The first unchecked task counts as the running one, unless a task is marked `[~]`, `[>]` or `[/]`. Its elapsed time counts from when the pane first saw it running.
 
 ## Install
 
@@ -51,12 +54,21 @@ Open the pane with `/odd-tasks`. It also opens by itself on terminals 144 column
 
 ## Use
 
-| Action | How |
-| --- | --- |
-| Switch tab | Click it, or press `p` (Plan) / `c` (Changes) while the pane has focus |
-| Expand or collapse a section, task or git group | Click it, or focus it and press Enter |
+Click the pane to give it keyboard focus. Escape hands the focus back to the prompt.
 
-The pane refreshes after every Read, Write, Edit and Bash call, and when `/odd-tasks` runs. Changes made outside the session appear on the next one of those.
+| Key | Action |
+| --- | --- |
+| `j` / `↓`, `k` / `↑` | Move the cursor |
+| `g` / `G` | Top / bottom |
+| `Enter` / `Space` | Fold or unfold the current section or group (on a child row, its parent) |
+| `h` / `←`, `l` / `→` | Collapse / expand |
+| `Tab`, `1`, `2` | Switch tab |
+| `s` or `,` | Open settings (`s`, `,` or `q` closes it) |
+| `q` | Close the pane |
+
+Tabs, rows and the gear icon also respond to a mouse click.
+
+The pane re-reads the plan file and `git` every few seconds and after every Read, Write, Edit and Bash call.
 
 ## Develop
 

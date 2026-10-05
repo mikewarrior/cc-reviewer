@@ -1,32 +1,54 @@
-export type OddTask = { id: string; text: string; body: string; isDone: boolean }
-export type OddSection = {
+export type Layout = 'outline' | 'powerline' | 'focus'
+export type Settings = { layout: Layout; nerdFont: boolean }
+
+export type TaskStatus = 'done' | 'running' | 'todo'
+export type PlanTask = { id: string; text: string; status: TaskStatus }
+export type PlanSection = { title: string; lines: string[]; tasks: PlanTask[] | null }
+export type Plan = {
+  ticket: string
   title: string
-  text: string
-  tasks: OddTask[] | null
-  done: number
-  total: number
+  file: string
+  sections: PlanSection[]
 }
-export type OddFeature = { name: string; title: string; sections: OddSection[] }
-export type GitChange = { status: string; path: string }
-export type GitStatus = {
+
+export type GitFile = {
+  st: string
+  path: string
+  add: number | null
+  del: number | null
+  count: number | null
+}
+export type GitCommit = { sha: string; subject: string }
+export type Git = {
   branch: string
   tracking: string
   ahead: number
   behind: number
-  staged: GitChange[]
-  unstaged: GitChange[]
-  untracked: GitChange[]
+  commits: GitCommit[]
+  staged: GitFile[]
+  unstaged: GitFile[]
+  untracked: GitFile[]
+  add: number
+  del: number
+}
+
+export type PanelProps = {
+  columns: number
+  rows: number
+  settings: Settings
+  plan: Plan | null
+  git: Git | null
+  runningSince: number | null
 }
 
 declare module 'claude-code' {
   interface PluginState {
     'odd-tasks': {
-      feature: OddFeature | null
+      plan: Plan | null
+      git: Git | null
+      settings: Settings
       active: string | null
-      flipped: string[]
-      opened: string[]
-      tab: 'plan' | 'changes'
-      git: GitStatus | null
+      runningSince: number | null
     }
   }
 }
