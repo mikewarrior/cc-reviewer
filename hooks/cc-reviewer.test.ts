@@ -45,6 +45,8 @@ type Options = {
   contents?: Record<string, string>
   settings?: Record<string, unknown>
   env?: Record<string, string>
+  branch?: string | null
+  store?: Record<string, unknown>
 }
 
 const REPO_FILE = '.claude/cc-reviewer.json'
@@ -62,6 +64,8 @@ const stubEngine = (
     contents = { '/work/odd/tasks/proj-1-example.md': PLAN },
     settings = {},
     env = {},
+    branch = 'feat/proj-1-example',
+    store = {},
   }: Options = {},
 ) => {
   on('session.start', () => ({ cwd: '/work' }))
@@ -70,8 +74,9 @@ const stubEngine = (
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('store.get', () => ({ value: undefined }))
+  on('store.get', (_$, e) => ({ value: store[e.key] }))
   on('store.set', (_$, e) => {
+    store[e.key] = e.value
     onSave?.(e.key, e.value)
 
     return { value: undefined }
@@ -97,6 +102,11 @@ const stubEngine = (
   on('process.run', (_$, e) => {
     if (!git) throw new Error('not a repo')
     const argv = e.argv.join(' ')
+    if (argv.includes('--show-current')) {
+      if (branch === null) return { value: { exitCode: 128, stdout: '', stderr: 'fatal' } }
+
+      return { value: { exitCode: 0, stdout: `${branch}\n`, stderr: '' } }
+    }
     const out = argv.includes('status')
       ? STATUS
       : argv.includes('--cached')
@@ -217,7 +227,7 @@ test('says so when there is no plan or no git repository', async ($, on) => {
   await $.session.start({ cwd: '/work' })
   const ui = await mountPane($)
 
-  expect(await ui.find({ ...IN, text: /No plan found in odd\/tasks/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in odd\/tasks/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
   await ui.key({ ...IN, key: '2' })
   expect(await ui.find({ ...IN, text: /Not a git repository/ })).toBeDefined()
@@ -225,6 +235,7 @@ test('says so when there is no plan or no git repository', async ($, on) => {
 
 test('the repo file wins over the global option', async ($, on) => {
   stubEngine(on, {
+    branch: 'feat/repo',
     folders: {
       '/work/odd/tasks': [{ name: 'repo.md', mtimeMs: 1 }],
       '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }],
@@ -245,6 +256,7 @@ test('the repo file wins over the global option', async ($, on) => {
 test('the global option is used when the repo has no file', { options: { planDir: 'docs/plans' } }, async ($, on) => {
   stubEngine(on, {
     repo: null,
+    branch: 'feat/global',
     folders: { '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }] },
     contents: { '/work/docs/plans/global.md': planOf('Global plan') },
   })
@@ -259,6 +271,7 @@ for (const repo of ['{ not json', '{ "planDir": "   " }', '[]']) {
   test(`a repo file holding ${repo} is ignored`, { options: { planDir: 'docs/plans' } }, async ($, on) => {
     stubEngine(on, {
       repo,
+      branch: 'feat/global',
       folders: { '/work/docs/plans': [{ name: 'global.md', mtimeMs: 9 }] },
       contents: { '/work/docs/plans/global.md': planOf('Global plan') },
     })
@@ -269,8 +282,9 @@ for (const repo of ['{ not json', '{ "planDir": "   " }', '[]']) {
   })
 }
 
-test('the session last touched file wins over the newest one in a configured folder', async ($, on) => {
+test('the session last touched file wins over the branch match in a configured folder', async ($, on) => {
   stubEngine(on, {
+    branch: 'feat/new',
     folders: {
       '/work/odd/tasks': [
         { name: 'old.md', mtimeMs: 1 },
@@ -300,6 +314,7 @@ test('the session last touched file wins over the newest one in a configured fol
 test("Claude's default folder shows only the session plan, never the newest", async ($, on) => {
   stubEngine(on, {
     repo: null,
+    branch: 'feat/unrelated',
     env: { HOME: '/home/me' },
     folders: {
       '/home/me/.claude/plans': [
@@ -316,7 +331,7 @@ test("Claude's default folder shows only the session plan, never the newest", as
   const ui = await mountPane($)
 
   expect(await ui.find({ ...IN, text: /Other project/ })).toBeUndefined()
-  expect(await ui.find({ ...IN, text: /No plan for this session/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
   expect(await ui.find({ ...IN, text: /cc-reviewer\.json/ })).toBeDefined()
 
   await ui.unmount()
@@ -326,9 +341,10 @@ test("Claude's default folder shows only the session plan, never the newest", as
   expect(await bound.find({ ...IN, text: /Other project/ })).toBeUndefined()
 })
 
-test('plansDirectory falls back to the newest file when the session has no plan yet', async ($, on) => {
+test('plansDirectory shows the branch match until the session has a plan', async ($, on) => {
   stubEngine(on, {
     repo: null,
+    branch: 'feat/new',
     settings: { plansDirectory: '.plans' },
     folders: {
       '/work/.plans': [
@@ -349,4 +365,147 @@ test('plansDirectory falls back to the newest file when the session has no plan 
   await bindPlan($, '/work/.plans/old.md')
   const bound = await mountPane($)
   expect(await bound.find({ ...IN, text: /Old plan/ })).toBeDefined()
+})
+
+const TASKS = '/work/odd/tasks'
+
+const twoPlans = {
+  folders: {
+    [TASKS]: [
+      { name: 'foo.md', mtimeMs: 1 },
+      { name: 'bar.md', mtimeMs: 9 },
+    ],
+  },
+  contents: {
+    [`${TASKS}/foo.md`]: planOf('Foo plan'),
+    [`${TASKS}/bar.md`]: planOf('Bar plan'),
+  },
+}
+
+test('main shows the empty state even when the folder holds files', async ($, on) => {
+  stubEngine(on, { ...twoPlans, branch: 'main' })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Foo plan|Bar plan/ })).toBeUndefined()
+})
+
+test('a feature branch shows the file named after it', async ($, on) => {
+  stubEngine(on, { ...twoPlans, branch: 'feat/foo' })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Foo plan/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Bar plan/ })).toBeUndefined()
+})
+
+test('a ticket id in the branch matches the file that starts with it', async ($, on) => {
+  stubEngine(on, {
+    branch: 'feature/ABC-123-add-login',
+    folders: {
+      [TASKS]: [
+        { name: 'abc-12-other.md', mtimeMs: 9 },
+        { name: 'abc-123-login-work.md', mtimeMs: 1 },
+      ],
+    },
+    contents: {
+      [`${TASKS}/abc-12-other.md`]: planOf('Other ticket'),
+      [`${TASKS}/abc-123-login-work.md`]: planOf('Login ticket'),
+    },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Login ticket/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Other ticket/ })).toBeUndefined()
+})
+
+test('a plan touched on a branch is remembered and restored in a new session on that branch', async ($, on) => {
+  const saved: Record<string, unknown> = {}
+  stubEngine(on, { ...twoPlans, branch: 'feat/baz', onSave: (key, value) => (saved[key] = value) })
+  await $.session.start({ cwd: '/work' })
+  await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/bar.md' })
+
+  expect(saved.branchPlans).toEqual({ '/work\nfeat/baz': `${TASKS}/bar.md` })
+})
+
+test('the branch memory restores its plan in a new session on the same branch', async ($, on) => {
+  stubEngine(on, {
+    ...twoPlans,
+    branch: 'feat/baz',
+    store: { branchPlans: { '/work\nfeat/baz': `${TASKS}/bar.md` } },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /Bar plan/ })).toBeDefined()
+  expect(await ui.find({ ...IN, text: /Foo plan/ })).toBeUndefined()
+})
+
+for (const branch of ['main', 'feat/other']) {
+  test(`the branch memory of feat/baz is not used on ${branch}`, async ($, on) => {
+    stubEngine(on, {
+      ...twoPlans,
+      branch,
+      store: { branchPlans: { '/work\nfeat/baz': `${TASKS}/bar.md` } },
+    })
+    await $.session.start({ cwd: '/work' })
+    const ui = await mountPane($)
+
+    expect(await ui.find({ ...IN, text: /Bar plan/ })).toBeUndefined()
+    expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
+  })
+}
+
+test('the branch memory is ignored when its file left the folder', async ($, on) => {
+  stubEngine(on, {
+    ...twoPlans,
+    branch: 'feat/baz',
+    store: { branchPlans: { '/work\nfeat/baz': `${TASKS}/gone.md` } },
+  })
+  await $.session.start({ cwd: '/work' })
+  const ui = await mountPane($)
+
+  expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
+})
+
+for (const branch of ['main', 'master']) {
+  test(`${branch} never records a branch memory`, async ($, on) => {
+    const saved: string[] = []
+    stubEngine(on, { ...twoPlans, branch, onSave: key => saved.push(key) })
+    await $.session.start({ cwd: '/work' })
+    await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/bar.md' })
+    await bindPlan($, `${TASKS}/foo.md`)
+
+    expect(saved).not.toContain('branchPlans')
+  })
+}
+
+for (const branch of ['', null]) {
+  test(`a detached or unknown branch (${JSON.stringify(branch)}) skips the memory and the name match`, async ($, on) => {
+    const saved: string[] = []
+    stubEngine(on, {
+      ...twoPlans,
+      branch,
+      onSave: key => saved.push(key),
+      store: { branchPlans: { '/work\nfoo': `${TASKS}/bar.md` } },
+    })
+    await $.session.start({ cwd: '/work' })
+    const ui = await mountPane($)
+
+    expect(await ui.find({ ...IN, text: /No plan found for this session or branch in/ })).toBeDefined()
+    expect(await ui.find({ ...IN, text: /Foo plan|Bar plan/ })).toBeUndefined()
+    await $.tool.call({ tool: 'Read', file_path: 'odd/tasks/bar.md' })
+    expect(saved).not.toContain('branchPlans')
+  })
+}
+
+test('a bound plan is remembered for the branch when it sits in the searched folder', async ($, on) => {
+  const saved: Record<string, unknown> = {}
+  stubEngine(on, { ...twoPlans, branch: 'feat/baz', onSave: (key, value) => (saved[key] = value) })
+  await $.session.start({ cwd: '/work' })
+  await bindPlan($, `${TASKS}/bar.md`)
+
+  expect(saved.branchPlans).toEqual({ '/work\nfeat/baz': `${TASKS}/bar.md` })
 })

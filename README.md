@@ -25,12 +25,16 @@ The repo file looks like this. The folder is relative to the project, or absolut
 
 The plugin option is a text field in the plugin's config menu (`planDir`). Leave it empty to skip it. A repo file that is missing, is not valid JSON or has an empty `planDir` is ignored.
 
-Which file the pane shows:
+Which file the pane shows, first match wins:
 
-- In a folder you chose (1 or 2), the file this session last read, wrote or edited there. Until then, the newest `*.md` by modified time.
-- In Claude's folder (3), the plan file of this session. The pane learns it when plan mode starts, or when this session reads, writes or edits a file in that folder. If you set `plansDirectory`, it shows the newest file until the session has one. The shared `~/.claude/plans` folder holds plans from all your projects, so there the pane never falls back to the newest file.
+1. The plan file of this session, when plan mode starts and reports it.
+2. The file this session last read, wrote or edited in the folder.
+3. The file you last used on the current git branch, remembered per project and branch. A new session on the same branch picks it up again.
+4. A file named after the branch: its name equals the branch name or the last part after `/` (`feat/foo` finds `foo.md`), or it starts with the same ticket id (`feature/ABC-123-login` finds `abc-123-login.md`). The most recently modified one wins.
 
-When no plan is found, the Plan tab says which folder it looked in and how to set `planDir`.
+There is no newest-file fallback, so a leftover plan from another session or branch is never shown. On `main` and `master` only 1 and 2 apply, and nothing is remembered for them. Without a git branch (detached HEAD or no repository) 3 and 4 are skipped. The shared `~/.claude/plans` folder holds plans from all your projects, so the same rules keep other projects' plans out of the pane.
+
+When no plan is found for the session or branch, the Plan tab says which folder it looked in and how to set `planDir`.
 
 ## Plan file format
 
